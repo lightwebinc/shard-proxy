@@ -2,7 +2,7 @@
 
 ## Overview
 
-bitcoin-shard-proxy receives BSV transaction frames (v1 or BRC-122) over UDP (and
+bitcoin-shard-proxy receives BSV transaction frames (v1 or BRC-124) over UDP (and
 optionally TCP), derives a deterministic multicast group address from each
 transaction's txid, then retransmits the original bytes verbatim to all
 configured egress interfaces.
@@ -50,14 +50,14 @@ tx_c  ──TCP──▶ [tcp conn] ─▶ forwarder ─▶ FF05::2 ──▶ su
 
 ## Wire Format
 
-### BRC-122 (current — 92 bytes)
+### BRC-124 (current — 92 bytes)
 
 ```text
 Offset  Size  Align  Field
 ------  ----  -----  -----
      0     4   —     Network magic         0xE3E1F3E8
      4     2   —     Protocol ver          0x02BF
-     6     1   —     Frame version         0x02 (BRC-122)
+     6     1   —     Frame version         0x02 (BRC-124)
      7     1   —     Reserved              0x00
      8    32   8B    Transaction ID        raw 256-bit txid (internal byte order)
     40     4   8B    Sender ID             CRC32c of source IPv6; 0 = unset
@@ -90,7 +90,7 @@ The proxy accepts them and forwards the original bytes unchanged.
 
 Every received datagram follows the same path:
 1. `frame.Decode(raw)` — extract the TxID; drop on bad magic or unknown version.
-2. **SenderID stamp (BRC-122 only)** — overwrite `raw[40:44]` in-place with the
+2. **SenderID stamp (BRC-124 only)** — overwrite `raw[40:44]` in-place with the
    CRC32c (Castagnoli) of the ingress source IPv6 address. v1 frames are untouched.
 3. `WriteTo(raw)` — write the raw bytes to every egress target.
 
@@ -127,7 +127,7 @@ Protocol primitives are provided by
 
 ```
 bitcoin-shard-common/
-  frame/             v1/BRC-122 wire format: Decode, Encode, constants, errors
+  frame/             v1/BRC-124 wire format: Decode, Encode, constants, errors
   shard/             txid → group index → IPv6 multicast address derivation
   sequence/          per-shard atomic monotonic counters
 ```

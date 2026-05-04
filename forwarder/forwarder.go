@@ -3,9 +3,9 @@
 //
 // # Hot path
 //
-// [Forwarder.Process] decodes the ingress frame (v1 or BRC-122), derives the
+// [Forwarder.Process] decodes the ingress frame (v1 or BRC-124), derives the
 // multicast group from the TxID, stamps the [frame.Frame.SenderID] field
-// in-place at raw[40:44] for BRC-122 frames (CRC32c of ingress source IPv6),
+// in-place at raw[40:44] for BRC-124 frames (CRC32c of ingress source IPv6),
 // then writes the raw bytes to every configured egress target.
 //
 // # Egress socket lifecycle
@@ -111,7 +111,7 @@ func closeTargets(targets []Target, log *slog.Logger) {
 
 // Process is the hot path: decode raw for routing, stamp SenderID, then forward.
 //
-// For BRC-122 frames, raw[40:44] is overwritten in-place with the CRC32c
+// For BRC-124 frames, raw[40:44] is overwritten in-place with the CRC32c
 // of the source IPv6 address before the datagram is sent to egress targets.
 // v1 frames are forwarded verbatim. workerID is used only for metrics labels.
 func (fw *Forwarder) Process(targets []Target, raw []byte, src net.Addr, workerID int) {

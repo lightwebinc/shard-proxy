@@ -8,7 +8,7 @@ as fallbacks; hard-coded defaults apply when neither is present.
 | Flag | Env var | Default | Description |  |  |  |
 |--------------------|-------------------|--------------------|----------------------------------------------------------------------------------------------------|----------|---------|----------|
 | `-listen` | `LISTEN_ADDR` | `[::]` | Ingress bind address (without port) |  |  |  |
-| `-udp-listen-port` | `UDP_LISTEN_PORT` | `9000` | UDP listen port for incoming BSV transaction frames (v1 or BRC-122) |  |  |  |
+| `-udp-listen-port` | `UDP_LISTEN_PORT` | `9000` | UDP listen port for incoming BSV transaction frames (v1 or BRC-124) |  |  |  |
 | `-tcp-listen-port` | `TCP_LISTEN_PORT` | `0` | TCP ingress port for reliable delivery (0 = disabled) |  |  |  |
 | `-iface` | `MULTICAST_IF` | `eth0` | Comma-separated NIC names for multicast egress |  |  |  |
 | `-egress-port` | `EGRESS_PORT` | `9001` | Destination UDP port for multicast groups |  |  |  |
@@ -43,9 +43,9 @@ path.
 ### TCP ingress (optional)
 
 TCP ingress provides reliable, ordered delivery for senders that require it
-(e.g. over lossy links). Each accepted connection carries a stream of v1 or BRC-122
+(e.g. over lossy links). Each accepted connection carries a stream of v1 or BRC-124
 frames concatenated end-to-end. The proxy reads 44 bytes first, then extends
-to 92 bytes if BRC-122 (`PayLen` at bytes 88–91), then reads `PayLen` payload bytes.
+to 92 bytes if BRC-124 (`PayLen` at bytes 88–91), then reads `PayLen` payload bytes.
 
 TCP ingress is disabled by default. Enable it with:
 
@@ -84,7 +84,7 @@ Increasing bits by 1 splits every existing group into two child groups
 
 ## Forwarding
 
-For **BRC-122 frames**, the proxy stamps the `SenderID` field (bytes 40–43)
+For **BRC-124 frames**, the proxy stamps the `SenderID` field (bytes 40–43)
 in-place with the CRC32c of the ingress source IPv6 address before forwarding.
 All other fields, including `SeqNum` and `SubtreeID`, are passed through
 unchanged exactly as the sender set them.
