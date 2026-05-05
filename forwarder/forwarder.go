@@ -4,9 +4,11 @@
 // # Hot path
 //
 // [Forwarder.Process] decodes the ingress frame (v1 or BRC-124), derives the
-// multicast group from the TxID, stamps the [frame.Frame.SenderID] field
-// in-place at raw[40:44] for BRC-124 frames (CRC32c of ingress source IPv6),
-// then writes the raw bytes to every configured egress target.
+// multicast group from the TxID, then for BRC-124 frames stamps PrevSeq and
+// CurSeq in-place at raw[40:48] and raw[48:56] using the seqhash package.
+// PrevSeq is the previous CurSeq for this (sender, group) pair; CurSeq is
+// XXH64(senderIPv6 ∥ groupIdx ∥ monotonic_counter). v1 frames are forwarded
+// verbatim.
 //
 // # Egress socket lifecycle
 //
@@ -18,20 +20,30 @@ package forwarder
 import (
 	"encoding/binary"
 	"fmt"
-	"hash/crc32"
 	"log/slog"
 	"net"
+	"sync"
 	"syscall"
 
 	"golang.org/x/sys/unix"
 
 	"github.com/lightwebinc/bitcoin-shard-common/frame"
+	"github.com/lightwebinc/bitcoin-shard-common/seqhash"
 	"github.com/lightwebinc/bitcoin-shard-common/shard"
 	"github.com/lightwebinc/bitcoin-shard-proxy/metrics"
 )
 
-// crc32cTable is the Castagnoli polynomial table for CRC32c.
-var crc32cTable = crc32.MakeTable(crc32.Castagnoli)
+// senderGroupKey identifies a unique (sender IPv6, multicast group) chain.
+type senderGroupKey struct {
+	ip  [16]byte
+	grp uint32
+}
+
+// senderGroupState holds the monotonic counter and last CurSeq for one chain.
+type senderGroupState struct {
+	counter uint64
+	curSeq  uint64
+}
 
 // Target pairs a network interface with its pre-opened multicast egress socket.
 type Target struct {
@@ -40,14 +52,17 @@ type Target struct {
 }
 
 // Forwarder decodes ingress frames (v1 or v2), derives the multicast
-// destination from the TxID, and forwards the raw bytes verbatim to all
-// egress targets.
+// destination from the TxID, stamps PrevSeq/CurSeq for v2 frames, and
+// forwards the raw bytes to all egress targets.
 type Forwarder struct {
 	engine     *shard.Engine
 	egressPort int
 	debug      bool
 	rec        *metrics.Recorder
 	log        *slog.Logger
+
+	mu     sync.Mutex
+	chains map[senderGroupKey]*senderGroupState
 }
 
 // New creates a Forwarder. No sockets are opened here; call [OpenTargets] in
@@ -64,6 +79,7 @@ func New(engine *shard.Engine, egressPort int, debug bool, rec *metrics.Recorder
 		debug:      debug,
 		rec:        rec,
 		log:        slog.Default().With("component", "forwarder"),
+		chains:     make(map[senderGroupKey]*senderGroupState),
 	}
 }
 
@@ -109,10 +125,10 @@ func closeTargets(targets []Target, log *slog.Logger) {
 	}
 }
 
-// Process is the hot path: decode raw for routing, stamp SenderID, then forward.
+// Process is the hot path: decode raw for routing, stamp PrevSeq/CurSeq, then forward.
 //
-// For BRC-124 frames, raw[40:44] is overwritten in-place with the CRC32c
-// of the source IPv6 address before the datagram is sent to egress targets.
+// For BRC-124 frames, raw[40:48] (PrevSeq) and raw[48:56] (CurSeq) are stamped
+// in-place using seqhash and a per-(sender, group) monotonic counter.
 // v1 frames are forwarded verbatim. workerID is used only for metrics labels.
 func (fw *Forwarder) Process(targets []Target, raw []byte, src net.Addr, workerID int) {
 	f, err := frame.Decode(raw)
@@ -124,13 +140,15 @@ func (fw *Forwarder) Process(targets []Target, raw []byte, src net.Addr, workerI
 		return
 	}
 
+	groupIdx := fw.engine.GroupIndex(&f.TxID)
+
 	if f.Version == frame.FrameVerV2 && src != nil {
 		ip := addrToIPv6(src)
-		senderID := crc32.Checksum(ip[:], crc32cTable)
-		binary.BigEndian.PutUint32(raw[40:44], senderID)
+		prevSeq, curSeq := fw.nextSeq(ip, groupIdx)
+		binary.BigEndian.PutUint64(raw[40:48], prevSeq)
+		binary.BigEndian.PutUint64(raw[48:56], curSeq)
 	}
 
-	groupIdx := fw.engine.GroupIndex(&f.TxID)
 	dst := fw.engine.Addr(groupIdx, fw.egressPort)
 
 	for _, tgt := range targets {
@@ -156,6 +174,24 @@ func (fw *Forwarder) Process(targets []Target, raw []byte, src net.Addr, workerI
 			"dst", dst,
 		)
 	}
+}
+
+// nextSeq returns (prevSeq, curSeq) for the given (sender IP, group) pair,
+// advancing the per-chain monotonic counter atomically.
+func (fw *Forwarder) nextSeq(ip [16]byte, groupIdx uint32) (prevSeq, curSeq uint64) {
+	key := senderGroupKey{ip: ip, grp: groupIdx}
+	fw.mu.Lock()
+	st, ok := fw.chains[key]
+	if !ok {
+		st = &senderGroupState{}
+		fw.chains[key] = st
+	}
+	st.counter++
+	prevSeq = st.curSeq
+	st.curSeq = seqhash.Hash(ip, groupIdx, st.counter)
+	curSeq = st.curSeq
+	fw.mu.Unlock()
+	return prevSeq, curSeq
 }
 
 // openEgressSocket opens a UDP6 socket with IPV6_MULTICAST_IF set to iface

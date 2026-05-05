@@ -45,11 +45,11 @@ func makeTargets(t *testing.T, conns ...*net.UDPConn) []Target {
 	return tgts
 }
 
-func buildV2Frame(t *testing.T, txidByte0 byte, seqNum uint32, payload []byte) []byte {
+func buildV2Frame(t *testing.T, txidByte0 byte, curSeq uint64, payload []byte) []byte {
 	t.Helper()
 	f := &frame.Frame{
-		SeqNum: seqNum,
-		Payload:     payload,
+		CurSeq:  curSeq,
+		Payload: payload,
 	}
 	f.TxID[0] = txidByte0
 	buf := make([]byte, frame.HeaderSize+len(payload))

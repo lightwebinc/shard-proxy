@@ -58,8 +58,7 @@ func main() {
 		for cycle := 0; *count == 0 || cycle < *count; cycle++ {
 			for g := 0; g < numGroups; g++ {
 				f := &frame.Frame{
-					Payload:    payload,
-					SequenceID: uint32(0xDEADBEEF + uint32(cycle*numGroups+g)), // Test sequence ID
+					Payload: payload,
 				}
 				txidPrefix := uint32(g) * step
 				binary.BigEndian.PutUint32(f.TxID[0:4], txidPrefix)
@@ -71,8 +70,7 @@ func main() {
 
 	for i := 0; *count == 0 || i < *count; i++ {
 		f := &frame.Frame{
-			Payload:    payload,
-			SequenceID: uint32(0xDEADBEEF + uint32(i)), // Test sequence ID
+			Payload: payload,
 		}
 		binary.BigEndian.PutUint32(f.TxID[0:4], uint32(i))
 		sendFrame(conn, e, f, buf, i, interval)
