@@ -96,6 +96,11 @@ type Recorder struct {
 	activeGroupsMu sync.Mutex
 	activeGroups   map[string]map[uint32]struct{}
 
+	// Control-plane forwarding (TCP ingress + BRC-127)
+	ctrlFramesForwarded metric.Int64Counter
+	tcpConnections      metric.Int64Counter
+	tcpBytesReceived    metric.Int64Counter
+
 	// Per-(iface, group) MeasurementOption cache
 	attrCache sync.Map
 
@@ -280,6 +285,20 @@ func New(instanceID string, numWorkers int, otlpEndpoint string, otlpInterval ti
 		return nil, err
 	}
 
+	if r.ctrlFramesForwarded, err = meter.Int64Counter("bsp_control_frames_forwarded_total",
+		metric.WithDescription("BRC-127 control datagrams forwarded to multicast (e.g. SubtreeAnnounce)")); err != nil {
+		return nil, err
+	}
+	if r.tcpConnections, err = meter.Int64Counter("bsp_tcp_connections_total",
+		metric.WithDescription("TCP connections accepted on the control-plane ingress port")); err != nil {
+		return nil, err
+	}
+	if r.tcpBytesReceived, err = meter.Int64Counter("bsp_tcp_bytes_received_total",
+		metric.WithDescription("Bytes read from TCP ingress connections"),
+		metric.WithUnit("By")); err != nil {
+		return nil, err
+	}
+
 	return r, nil
 }
 
@@ -318,6 +337,24 @@ func (r *Recorder) PacketForwarded(iface string, workerID int, groupIdx uint32, 
 	r.flowBytes.Add(ctx, int64(size), fopt)
 
 	r.trackGroup(iface, groupIdx)
+}
+
+// ControlFrameForwarded records a BRC-127 control datagram forwarded via ForwardControl.
+// ctrlGroup names the destination control group (e.g. "subtree_announce").
+func (r *Recorder) ControlFrameForwarded(ctrlGroup string) {
+	r.ctrlFramesForwarded.Add(context.Background(), 1, metric.WithAttributes(
+		attribute.String("ctrl_group", ctrlGroup),
+	))
+}
+
+// TCPConnectionAccepted records an accepted TCP ingress connection.
+func (r *Recorder) TCPConnectionAccepted() {
+	r.tcpConnections.Add(context.Background(), 1)
+}
+
+// TCPBytesReceived records bytes read from a TCP ingress connection.
+func (r *Recorder) TCPBytesReceived(n int) {
+	r.tcpBytesReceived.Add(context.Background(), int64(n))
 }
 
 // IngressError records a non-fatal ReadFrom error on the ingress socket.

@@ -208,11 +208,26 @@ func (fw *Forwarder) ForwardControl(targets []Target, raw []byte, ctrlGroupIdx u
 				"iface", tgt.Iface.Name, "dst", addr, "err", err)
 		}
 	}
+	if fw.rec != nil {
+		fw.rec.ControlFrameForwarded(ctrlGroupName(ctrlGroupIdx))
+	}
 	if fw.debug {
 		fw.log.Debug("control forwarded",
 			"ctrl_group", fmt.Sprintf("0x%06X", ctrlGroupIdx),
 			"dst", addr,
 		)
+	}
+}
+
+// ctrlGroupName returns a human-readable label for a control group index.
+func ctrlGroupName(idx uint32) string {
+	switch idx {
+	case shard.CtrlGroupSubtreeAnnounce:
+		return "subtree_announce"
+	case shard.CtrlGroupBeacon:
+		return "beacon"
+	default:
+		return fmt.Sprintf("0x%06x", idx)
 	}
 }
 

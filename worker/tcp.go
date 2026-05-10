@@ -91,6 +91,9 @@ func (ti *TCPIngress) Run(listenAddr string, listenPort int, done <-chan struct{
 			ti.log.Warn("Accept error", "err", err)
 			continue
 		}
+		if ti.rec != nil {
+			ti.rec.TCPConnectionAccepted()
+		}
 		connWG.Add(1)
 		go func() {
 			defer connWG.Done()
@@ -142,6 +145,9 @@ func (ti *TCPIngress) handleConn(conn net.Conn, targets []forwarder.Target) {
 				ti.log.Debug("TCP read SubtreeAnnounce extension error", "remote", remote, "err", err)
 				return
 			}
+			if ti.rec != nil {
+				ti.rec.TCPBytesReceived(frame.SubtreeAnnounceSize)
+			}
 			ti.fwd.ForwardControl(targets, ctrlBuf[:], shard.CtrlGroupSubtreeAnnounce, ti.fwd.EgressPort())
 			continue
 		case frame.FrameVerV1:
@@ -174,6 +180,9 @@ func (ti *TCPIngress) handleConn(conn net.Conn, targets []forwarder.Target) {
 			}
 		}
 
+		if ti.rec != nil {
+			ti.rec.TCPBytesReceived(hdrSize + payLen)
+		}
 		ti.fwd.Process(targets, frameBuf, remote, -1)
 	}
 }
