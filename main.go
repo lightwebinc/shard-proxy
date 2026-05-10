@@ -116,7 +116,7 @@ func main() {
 	)
 
 	// Construct the shared forwarder.
-	fwd := forwarder.New(engine, cfg.EgressPort, cfg.Debug, rec)
+	fwd := forwarder.New(engine, cfg.MCPrefix, cfg.MCMiddleBytes, cfg.EgressPort, cfg.Debug, rec)
 
 	// done is closed to signal all workers to stop their receive loops.
 	done := make(chan struct{})

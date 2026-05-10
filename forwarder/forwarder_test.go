@@ -74,7 +74,7 @@ func buildV1Frame(t *testing.T, txidByte0 byte, payload []byte) []byte {
 
 func makeForwarder() *Forwarder {
 	engine := shard.New(0xFF05, [11]byte{}, 8)
-	return New(engine, 9001, false, nil)
+	return New(engine, 0xFF05, [11]byte{}, 9001, false, nil)
 }
 
 // ── PrevSeq/CurSeq stamping ───────────────────────────────────────────────────
@@ -203,7 +203,7 @@ func TestProcessMultipleTargets(t *testing.T) {
 
 func TestProcessDebugMode(t *testing.T) {
 	engine := shard.New(0xFF05, [11]byte{}, 8)
-	fw := New(engine, 9001, true, nil)
+	fw := New(engine, 0xFF05, [11]byte{}, 9001, true, nil)
 	raw := buildV2Frame(t, 0xAB, 1, nil)
 	conn, _ := openLoopbackUDP(t)
 	fw.Process(makeTargets(t, conn), raw, fakeAddr{}, 0)

@@ -18,7 +18,7 @@ import (
 
 func makeTestForwarder() *forwarder.Forwarder {
 	engine := shard.New(0xFF05, [11]byte{}, 8)
-	return forwarder.New(engine, 9001, false, nil)
+	return forwarder.New(engine, 0xFF05, [11]byte{}, 9001, false, nil)
 }
 
 func TestNew(t *testing.T) {
