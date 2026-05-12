@@ -20,11 +20,8 @@ sender  ──UDP/TCP──►  bitcoin-shard-proxy  ──UDP multicast──�
 
 ## Documentation
 
-- [Protocol](docs/protocol.md) — proxy-specific forwarding rules; links to canonical wire format spec in `bitcoin-shard-common`
 - [Architecture](docs/architecture.md) — system overview, multi-CPU design, graceful shutdown, package structure
 - [Configuration](docs/configuration.md) — all flags, environment variables, ingress modes, drain timeout
-- [Testing](docs/testing.md) — unit tests, e2e test, LXD perf test, manual loopback test, `send-test-frames` reference
-- [Design Notes](docs/design.md) — resolved questions, open questions, roadmap
 
 ## Dependencies
 
