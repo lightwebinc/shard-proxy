@@ -11,8 +11,9 @@
 //	-tcp-listen-port      TCP_LISTEN_PORT       0         TCP ingress port (0 = disabled)
 //	-iface                MULTICAST_IF          eth0      Comma-separated NICs for multicast egress
 //	-egress-port          EGRESS_PORT           9001      Destination port on groups
-//	-shard-bits           SHARD_BITS            2         Key bit width (1–24)
+//	-shard-bits           SHARD_BITS            2         Key bit width (1–15)
 //	-scope                MC_SCOPE              site      Multicast scope
+//	-mc-group-id          MC_GROUP_ID           0x000B    IANA group-id (default Bitcoin = 0x000B)
 //	-workers              NUM_WORKERS           NumCPU    Worker goroutine count
 //	-debug                DEBUG                 false     Per-packet logging + loopback
 //	-metrics-addr         METRICS_ADDR          :9100     HTTP bind for /metrics, /healthz, /readyz
@@ -58,12 +59,11 @@ type Config struct {
 	EgressPort    int      // Destination UDP port written into outgoing multicast datagrams
 
 	// Sharding
-	ShardBits     uint     // Number of txid prefix bits used as the group key (1–24)
-	NumGroups     uint32   // Derived: 1 << ShardBits — total distinct multicast groups
-	MCScope       string   // Human name; one of the keys in Scopes
-	MCPrefix      uint16   // Derived from MCScope — upper 16 bits of the IPv6 group address
-	MCBaseAddr    string   // Base IPv6 address for assigned address space (bytes 2-12)
-	MCMiddleBytes [11]byte // Derived from MCBaseAddr — bytes 2-12 of multicast address
+	ShardBits uint   // Number of txid prefix bits used as the group key (1–15)
+	NumGroups uint32 // Derived: 1 << ShardBits — total distinct multicast groups
+	MCScope   string // Human name; one of the keys in Scopes
+	MCPrefix  uint16 // Derived from MCScope — upper 16 bits of the IPv6 group address
+	MCGroupID uint16 // IANA group-id occupying bytes 12–13 (default 0x000B)
 
 	// Runtime
 	NumWorkers   int           // Worker goroutine count; defaults to runtime.NumCPU()
@@ -100,8 +100,8 @@ func Load() (*Config, error) {
 		"number of worker goroutines (0 = runtime.NumCPU)")
 	flag.StringVar(&c.MCScope, "scope", envStr("MC_SCOPE", "site"),
 		"multicast scope: link | site | org | global")
-	flag.StringVar(&c.MCBaseAddr, "mc-base-addr", envStr("MC_BASE_ADDR", ""),
-		"base IPv6 address for assigned multicast address space (bytes 2-12)")
+	groupIDFlag := flag.String("mc-group-id", envStr("MC_GROUP_ID", "0x000B"),
+		"IANA group-id (bytes 12–13 of the IPv6 multicast address); default 0x000B (IANA Bitcoin)")
 	flag.BoolVar(&c.Debug, "debug", envBool("DEBUG", false),
 		"enable per-packet debug logging and multicast loopback (single-host testing)")
 	flag.DurationVar(&c.DrainTimeout, "drain-timeout", envDuration("DRAIN_TIMEOUT", 0),
@@ -117,13 +117,14 @@ func Load() (*Config, error) {
 		"OTLP push interval")
 
 	bits := flag.Uint("shard-bits", uint(envInt("SHARD_BITS", 2)),
-		"txid prefix bit width used as the shard key (1–24)")
+		"txid prefix bit width used as the shard key (1–15)")
 
 	flag.Parse()
 
-	// Validate shard bit width.
-	if *bits < 1 || *bits > 24 {
-		return nil, fmt.Errorf("shard-bits must be in [1, 24], got %d", *bits)
+	// Validate shard bit width. Top of the 16-bit shard space is reserved for
+	// control-plane groups (0xFFFC–0xFFFE), so practical bits is bounded at 15.
+	if *bits < 1 || *bits > 15 {
+		return nil, fmt.Errorf("shard-bits must be in [1, 15], got %d", *bits)
 	}
 	c.ShardBits = *bits
 	c.NumGroups = 1 << c.ShardBits
@@ -136,29 +137,12 @@ func Load() (*Config, error) {
 	}
 	c.MCPrefix = prefix
 
-	// Parse base IPv6 address for middle bytes if provided.
-	if c.MCBaseAddr != "" {
-		ip := net.ParseIP(c.MCBaseAddr)
-		if ip == nil {
-			return nil, fmt.Errorf("invalid base IPv6 address %q", c.MCBaseAddr)
-		}
-		// Ensure we have a 16-byte IPv6 address
-		ip16 := ip.To16()
-		if ip16 == nil {
-			return nil, fmt.Errorf("base address must be a valid 16-byte IPv6 address, got %q", c.MCBaseAddr)
-		}
-		// Check if it's actually IPv6 (not IPv4-mapped)
-		if ip.To4() != nil {
-			return nil, fmt.Errorf("base address must be IPv6, got IPv4 address %q", c.MCBaseAddr)
-		}
-		// Extract bytes 2-12 (11 bytes) for the middle section
-		copy(c.MCMiddleBytes[:], ip16[2:13])
-	} else {
-		// Default to all zeros for backward compatibility
-		for i := range c.MCMiddleBytes {
-			c.MCMiddleBytes[i] = 0
-		}
+	// Parse IANA group-id (default 0x000B = IANA Bitcoin allocation).
+	gid, err := parseGroupID(*groupIDFlag)
+	if err != nil {
+		return nil, fmt.Errorf("invalid -mc-group-id %q: %w", *groupIDFlag, err)
 	}
+	c.MCGroupID = gid
 
 	// Default workers to NumCPU if the flag or env was set to zero.
 	if c.NumWorkers <= 0 {
@@ -222,4 +206,27 @@ func envDuration(key string, def time.Duration) time.Duration {
 		}
 	}
 	return def
+}
+
+// parseGroupID accepts either a hex literal (0x000B, 000B) or a decimal
+// integer in the range [0, 0xFFFF].
+func parseGroupID(s string) (uint16, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("empty value")
+	}
+	base := 10
+	low := strings.ToLower(s)
+	if strings.HasPrefix(low, "0x") {
+		s = s[2:]
+		base = 16
+	} else if _, err := strconv.ParseUint(s, 10, 16); err != nil {
+		// fall back to hex if not a valid decimal
+		base = 16
+	}
+	n, err := strconv.ParseUint(s, base, 16)
+	if err != nil {
+		return 0, err
+	}
+	return uint16(n), nil
 }

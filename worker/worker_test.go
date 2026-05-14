@@ -17,8 +17,8 @@ import (
 // ── New ───────────────────────────────────────────────────────────────────────
 
 func makeTestForwarder() *forwarder.Forwarder {
-	engine := shard.New(0xFF05, [11]byte{}, 8)
-	return forwarder.New(engine, 0xFF05, [11]byte{}, 9001, false, nil)
+	engine := shard.New(0xFF05, shard.DefaultGroupID, 8)
+	return forwarder.New(engine, 0xFF05, shard.DefaultGroupID, 9001, false, nil)
 }
 
 func TestNew(t *testing.T) {

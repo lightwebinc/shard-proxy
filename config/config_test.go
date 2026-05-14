@@ -152,32 +152,33 @@ func TestLoadEmptyIfaceError(t *testing.T) {
 	}
 }
 
-func TestLoadMCBaseAddrValid(t *testing.T) {
+func TestLoadMCGroupIDDefault(t *testing.T) {
 	iface := realIface(t)
-	cfg, err := parseArgs(t, []string{"-iface", iface, "-mc-base-addr", "ff05::1:2:3"})
+	cfg, err := parseArgs(t, []string{"-iface", iface})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	// Middle bytes should be non-zero.
-	var zero [11]byte
-	if cfg.MCMiddleBytes == zero {
-		t.Error("MCMiddleBytes should be non-zero for non-empty base addr")
+	if cfg.MCGroupID != 0x000B {
+		t.Errorf("MCGroupID = 0x%04X, want 0x000B (IANA Bitcoin)", cfg.MCGroupID)
 	}
 }
 
-func TestLoadMCBaseAddrInvalid(t *testing.T) {
+func TestLoadMCGroupIDHex(t *testing.T) {
 	iface := realIface(t)
-	_, err := parseArgs(t, []string{"-iface", iface, "-mc-base-addr", "not-an-ip"})
-	if err == nil {
-		t.Error("want error for invalid base addr, got nil")
+	cfg, err := parseArgs(t, []string{"-iface", iface, "-mc-group-id", "0xCAFE"})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.MCGroupID != 0xCAFE {
+		t.Errorf("MCGroupID = 0x%04X, want 0xCAFE", cfg.MCGroupID)
 	}
 }
 
-func TestLoadMCBaseAddrIPv4Rejected(t *testing.T) {
+func TestLoadMCGroupIDInvalid(t *testing.T) {
 	iface := realIface(t)
-	_, err := parseArgs(t, []string{"-iface", iface, "-mc-base-addr", "192.168.1.1"})
+	_, err := parseArgs(t, []string{"-iface", iface, "-mc-group-id", "not-a-number"})
 	if err == nil {
-		t.Error("want error for IPv4 base addr, got nil")
+		t.Error("want error for invalid mc-group-id, got nil")
 	}
 }
 

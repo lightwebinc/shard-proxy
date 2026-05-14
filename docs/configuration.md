@@ -12,9 +12,9 @@ as fallbacks; hard-coded defaults apply when neither is present.
 | `-tcp-listen-port` | `TCP_LISTEN_PORT` | `0` | TCP ingress port for reliable delivery (0 = disabled) |  |  |  |
 | `-iface` | `MULTICAST_IF` | `eth0` | Comma-separated NIC names for multicast egress |  |  |  |
 | `-egress-port` | `EGRESS_PORT` | `9001` | Destination UDP port for multicast groups |  |  |  |
-| `-shard-bits` | `SHARD_BITS` | `2` | Key bit width (1–24) |  |  |  |
+| `-shard-bits` | `SHARD_BITS` | `2` | Key bit width (1–15) |  |  |  |
 | `-scope` | `MC_SCOPE` | `site` | Multicast scope: `link` \ | `site` \ | `org` \ | `global` |
-| `-mc-base-addr` | `MC_BASE_ADDR` | `""` | Base IPv6 address for assigned multicast address space (bytes 2–12) |  |  |  |
+| `-mc-group-id` | `MC_GROUP_ID` | `0x000B` | IANA group-id (bytes 12–13); default = IANA Bitcoin allocation `FF0X::B` |  |  |  |
 | `-workers` | `NUM_WORKERS` | `runtime.NumCPU()` | Worker goroutine count (0 = NumCPU) |  |  |  |
 | `-debug` | `DEBUG` | `false` | Enable per-packet debug logging and multicast loopback |  |  |  |
 | `-drain-timeout` | `DRAIN_TIMEOUT` | `0s` | Pre-drain delay before closing sockets; `/readyz` returns 503 during this window (`0s` = disabled) |  |  |  |
@@ -175,25 +175,24 @@ bitcoin-shard-proxy \
   -drain-timeout 15s
 ```
 
-## Assigned address space
+## IANA group-id
 
-The `-mc-base-addr` flag allows use of assigned IPv6 address space instead
-of the generic zero-filled middle section. Useful when specific multicast
-address ranges have been allocated by a numbers authority.
+The proxy follows IANA's IPv6 multicast allocation practice (96-bit
+boundary) and the IANA-assigned Bitcoin group `FF0X::B`. The `-mc-group-id`
+flag configures the 16-bit group-id occupying bytes 12–13 of every
+generated multicast address. The default `0x000B` produces addresses of
+the form `FF0X::B:<shard_index>` (IANA Bitcoin).
 
 ```bash
 ./bitcoin-shard-proxy \
-  -mc-base-addr "2001:db8:1234::" \
+  -mc-group-id 0x000B \
   -scope site \
-  -shard-bits 16
+  -shard-bits 8
 ```
 
-This generates addresses like `FF05:2001:db8:1234::<group_index>` instead
-of the default `FF05::<group_index>`.
-
-The base address can be any valid IPv6 address; only bytes 2–12 are used
-for the middle section. The first two bytes are replaced by the multicast
-prefix and scope.
+Operators MAY override the group-id for testing or private deployments
+(e.g. `-mc-group-id 0xCAFE`). Conformant production deployments use
+`0x000B`.
 
 ## Fan-out to multiple interfaces
 
@@ -203,7 +202,7 @@ with no copying and no extra goroutines on the hot path:
 ```bash
 ./bitcoin-shard-proxy \
   -iface       eth0,eth1 \
-  -shard-bits  16        \
+  -shard-bits  8         \
   -scope       site      \
   -udp-listen-port 9000  \
   -egress-port 9001
@@ -215,8 +214,8 @@ Each subscriber calls `IPV6_JOIN_GROUP` (or `setsockopt MCAST_JOIN_GROUP`)
 for the multicast group address(es) covering its desired shard range:
 
 ```text
-FF05::<group_index>                   # Default format
-FF05:2001:db8:1234::<group_index>     # With assigned address space
+FF05::B:<shard_index>             # Default (IANA Bitcoin group-id 0x000B)
+FF05::CAFE:<shard_index>          # With overridden group-id 0xCAFE
 ```
 
 `SHARD_BITS` is a fixed, deployment-wide setting shared by all subscribers.

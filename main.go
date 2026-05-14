@@ -9,7 +9,7 @@
 //
 // # Quick start
 //
-//	bitcoin-shard-proxy -iface eth0,eth1 -shard-bits 16 -scope site
+//	bitcoin-shard-proxy -iface eth0,eth1 -shard-bits 8 -scope site
 //
 // # Configuration
 //
@@ -17,10 +17,14 @@
 // full mapping. The most important parameters:
 //
 //   - -shard-bits (SHARD_BITS): controls how many bits of the txid prefix
-//     are used as the multicast group key. Range 1–24.
+//     are used as the multicast group key. Range 1–15.
 //     8  →   256 groups (fits any managed switch)
-//     16 → 65536 groups (standard deployment)
-//     24 → 16M   groups (maximum precision)
+//     12 →  4096 groups
+//     15 → 32768 groups (maximum; top of 16-bit space reserved for control)
+//
+//   - -mc-group-id (MC_GROUP_ID): IANA group-id occupying bytes 12–13 of
+//     the address. Default 0x000B (IANA Bitcoin allocation "FF0X::B").
+//     Operators MAY override for testing/private deployments.
 //
 //   - -scope (MC_SCOPE): multicast scope. Use "site" for closed subscriber
 //     fabrics; "global" only if subscribers span BGP domains.
@@ -98,7 +102,7 @@ func main() {
 	}
 
 	// Construct the shard engine. It is immutable and safe for concurrent use.
-	engine := shard.New(cfg.MCPrefix, cfg.MCMiddleBytes, cfg.ShardBits)
+	engine := shard.New(cfg.MCPrefix, cfg.MCGroupID, cfg.ShardBits)
 
 	slog.Info("bitcoin-shard-proxy starting",
 		"workers", cfg.NumWorkers,
@@ -116,7 +120,7 @@ func main() {
 	)
 
 	// Construct the shared forwarder.
-	fwd := forwarder.New(engine, cfg.MCPrefix, cfg.MCMiddleBytes, cfg.EgressPort, cfg.Debug, rec)
+	fwd := forwarder.New(engine, cfg.MCPrefix, cfg.MCGroupID, cfg.EgressPort, cfg.Debug, rec)
 
 	// done is closed to signal all workers to stop their receive loops.
 	done := make(chan struct{})

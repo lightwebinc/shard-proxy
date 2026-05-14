@@ -10,16 +10,17 @@ configured egress interfaces.
 See [docs/protocol.md](protocol.md) for the complete wire format specification.
 
 ```text
-sender  ──UDP/TCP──►  bitcoin-shard-proxy  ──UDP multicast──►  FF05::<shard>  (iface 0)
-                      (forwarder pipeline) └─────────────────►  FF05::<shard>  (iface 1)
+sender  ──UDP/TCP──►  bitcoin-shard-proxy  ──UDP multicast──►  FF05::B:<shard>  (iface 0)
+                      (forwarder pipeline) └─────────────────►  FF05::B:<shard>  (iface 1)
                                                                  (subset of subscribers)
 ```
 
 ## Shard Address Derivation
 
 ```text
-groupIndex = (txid[0:4] as uint32 BE) >> (32 - shardBits)
-IPv6 group = [FFsc::groupIndex]       // sc = two-nibble scope code
+groupIndex = (txid[0:4] as uint32 BE) >> (32 - shardBits)        // 16-bit max
+IPv6 group = [FF0X:0:0:0:0:0:GroupID:groupIndex]                  // X = scope nibble
+                                                                  // GroupID = 0x000B (IANA Bitcoin)
 ```
 
 The top bits of the first four bytes of the txid are used as the group key.
@@ -43,9 +44,9 @@ and UDP share the same `forwarder.Forwarder` and egress targets.
 ```
 senders (UDP)              proxy (N UDP workers + 1 TCP listener)
 ─────────────              ─────────────────────────────────────
-tx_a  ──UDP──▶ [worker 0] ─▶ forwarder ─▶ FF05::3 ──▶ sub_X
-tx_b  ──UDP──▶ [worker 1] ─▶ forwarder ─▶ FF05::1 ──▶ sub_Y
-tx_c  ──TCP──▶ [tcp conn] ─▶ forwarder ─▶ FF05::2 ──▶ sub_Z
+tx_a  ──UDP──▶ [worker 0] ─▶ forwarder ─▶ FF05::B:3 ──▶ sub_X
+tx_b  ──UDP──▶ [worker 1] ─▶ forwarder ─▶ FF05::B:1 ──▶ sub_Y
+tx_c  ──TCP──▶ [tcp conn] ─▶ forwarder ─▶ FF05::B:2 ──▶ sub_Z
 ```
 
 ## Wire Format

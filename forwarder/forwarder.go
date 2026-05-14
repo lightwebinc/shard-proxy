@@ -59,13 +59,13 @@ type Target struct {
 // Forwarder decodes ingress frames (BRC-12 or BRC-124/BRC-128), derives the multicast
 // destination from the TxID, stamps PrevSeq/CurSeq for BRC-124/BRC-128 frames, and
 type Forwarder struct {
-	engine        *shard.Engine
-	mcPrefix      uint16
-	mcMiddleBytes [11]byte
-	egressPort    int
-	debug         bool
-	rec           *metrics.Recorder
-	log           *slog.Logger
+	engine     *shard.Engine
+	mcPrefix   uint16
+	mcGroupID  uint16
+	egressPort int
+	debug      bool
+	rec        *metrics.Recorder
+	log        *slog.Logger
 
 	mu     sync.Mutex
 	chains map[senderGroupKey]*senderGroupState
@@ -76,20 +76,20 @@ type Forwarder struct {
 //
 //   - engine: immutable shard derivation engine.
 //   - mcPrefix: upper 16-bit scope prefix for control-plane group address derivation.
-//   - mcMiddleBytes: bytes 2–12 of the IPv6 multicast address (from -mc-base-addr).
+//   - mcGroupID: IANA group-id occupying bytes 12–13 (default [shard.DefaultGroupID]).
 //   - egressPort: UDP destination port written into outgoing multicast datagrams.
 //   - debug: enable per-packet debug logging.
 //   - rec: metrics recorder; may be nil.
-func New(engine *shard.Engine, mcPrefix uint16, mcMiddleBytes [11]byte, egressPort int, debug bool, rec *metrics.Recorder) *Forwarder {
+func New(engine *shard.Engine, mcPrefix uint16, mcGroupID uint16, egressPort int, debug bool, rec *metrics.Recorder) *Forwarder {
 	return &Forwarder{
-		engine:        engine,
-		mcPrefix:      mcPrefix,
-		mcMiddleBytes: mcMiddleBytes,
-		egressPort:    egressPort,
-		debug:         debug,
-		rec:           rec,
-		log:           slog.Default().With("component", "forwarder"),
-		chains:        make(map[senderGroupKey]*senderGroupState),
+		engine:     engine,
+		mcPrefix:   mcPrefix,
+		mcGroupID:  mcGroupID,
+		egressPort: egressPort,
+		debug:      debug,
+		rec:        rec,
+		log:        slog.Default().With("component", "forwarder"),
+		chains:     make(map[senderGroupKey]*senderGroupState),
 	}
 }
 
@@ -196,10 +196,10 @@ func (fw *Forwarder) EgressPort() int { return fw.egressPort }
 // ForwardControl sends a raw BRC-127 control datagram (e.g. SubtreeAnnounce)
 // to the given control-plane multicast group index on all egress targets.
 // The destination address is derived using [shard.ControlGroupAddr] with the
-// engine's configured scope prefix and middle bytes.
+// engine's configured scope prefix and IANA group-id.
 // Unlike [Process], no sequence stamping or frame decoding is performed.
-func (fw *Forwarder) ForwardControl(targets []Target, raw []byte, ctrlGroupIdx uint32, port int) {
-	dst := shard.ControlGroupAddr(fw.mcPrefix, fw.mcMiddleBytes, ctrlGroupIdx)
+func (fw *Forwarder) ForwardControl(targets []Target, raw []byte, ctrlGroupIdx uint16, port int) {
+	dst := shard.ControlGroupAddr(fw.mcPrefix, fw.mcGroupID, ctrlGroupIdx)
 	addr := &net.UDPAddr{IP: dst, Port: port}
 	for _, tgt := range targets {
 		addr.Zone = tgt.Iface.Name
@@ -213,21 +213,23 @@ func (fw *Forwarder) ForwardControl(targets []Target, raw []byte, ctrlGroupIdx u
 	}
 	if fw.debug {
 		fw.log.Debug("control forwarded",
-			"ctrl_group", fmt.Sprintf("0x%06X", ctrlGroupIdx),
+			"ctrl_group", fmt.Sprintf("0x%04X", ctrlGroupIdx),
 			"dst", addr,
 		)
 	}
 }
 
 // ctrlGroupName returns a human-readable label for a control group index.
-func ctrlGroupName(idx uint32) string {
+func ctrlGroupName(idx uint16) string {
 	switch idx {
 	case shard.CtrlGroupSubtreeAnnounce:
 		return "subtree_announce"
 	case shard.CtrlGroupBeacon:
 		return "beacon"
+	case shard.CtrlGroupControl:
+		return "control"
 	default:
-		return fmt.Sprintf("0x%06x", idx)
+		return fmt.Sprintf("0x%04x", idx)
 	}
 }
 

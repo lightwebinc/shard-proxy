@@ -20,7 +20,7 @@ func TestForwardControl_PerTargetWrite(t *testing.T) {
 	raw[0] = 0xE3
 	fw.ForwardControl(tgts, raw, shard.CtrlGroupSubtreeAnnounce, 9001)
 	fw.ForwardControl(tgts, raw, shard.CtrlGroupBeacon, 9001)
-	fw.ForwardControl(tgts, raw, 0xFFF000, 9001) // unknown — exercises default label branch
+	fw.ForwardControl(tgts, raw, 0xF000, 9001) // unknown — exercises default label branch
 }
 
 func TestForwardControl_EmptyTargets(t *testing.T) {
@@ -37,23 +37,24 @@ func TestEgressPort(t *testing.T) {
 
 func TestCtrlGroupName(t *testing.T) {
 	tests := []struct {
-		idx  uint32
+		idx  uint16
 		want string
 	}{
 		{shard.CtrlGroupSubtreeAnnounce, "subtree_announce"},
 		{shard.CtrlGroupBeacon, "beacon"},
-		{0xABCDEF, "0xabcdef"},
+		{shard.CtrlGroupControl, "control"},
+		{0xABCD, "0xabcd"},
 	}
 	for _, tc := range tests {
 		if got := ctrlGroupName(tc.idx); got != tc.want {
-			t.Errorf("ctrlGroupName(0x%06X) = %q, want %q", tc.idx, got, tc.want)
+			t.Errorf("ctrlGroupName(0x%04X) = %q, want %q", tc.idx, got, tc.want)
 		}
 	}
 }
 
 func TestForwardControl_DebugMode(t *testing.T) {
 	engine := makeForwarder().engine
-	fw := New(engine, 0xFF05, [11]byte{}, 9001, true, nil)
+	fw := New(engine, 0xFF05, shard.DefaultGroupID, 9001, true, nil)
 	conn, _ := openLoopbackUDP(t)
 	fw.ForwardControl(makeTargets(t, conn), make([]byte, 64), shard.CtrlGroupBeacon, 9001)
 
