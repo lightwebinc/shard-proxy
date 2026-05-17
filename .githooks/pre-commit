@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Pre-commit hook: gofmt + go vet + golangci-lint
+#
+# Install once per clone:
+#   make hooks
+set -euo pipefail
+
+echo "pre-commit: gofmt..."
+unformatted=$(gofmt -l .)
+if [[ -n "$unformatted" ]]; then
+  echo "ERROR: the following files need gofmt:"
+  printf '  %s\n' $unformatted
+  echo "Run: gofmt -w ."
+  exit 1
+fi
+
+echo "pre-commit: go vet..."
+go vet ./...
+
+if command -v golangci-lint &>/dev/null; then
+  echo "pre-commit: golangci-lint..."
+  golangci-lint run ./...
+else
+  echo "pre-commit: golangci-lint not found, skipping"
+  echo "  Install: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"
+fi
+
+echo "pre-commit: OK"

@@ -3,7 +3,7 @@ SEND   := send-test-frames
 RECV   := recv-test-frames
 PERF   := perf-test
 
-.PHONY: all test test-e2e clean
+.PHONY: all test test-e2e lint hooks clean
 
 all: $(BINARY) $(SEND) $(RECV) $(PERF)
 
@@ -24,6 +24,13 @@ test:
 
 test-e2e: $(BINARY) $(SEND) $(RECV)
 	PATH="$(CURDIR):$$PATH" sh test/run-e2e.sh
+
+lint:
+	golangci-lint run ./...
+
+hooks:
+	git config core.hooksPath .githooks
+	@echo "pre-commit hook installed (git config core.hooksPath .githooks)"
 
 clean:
 	rm -f $(BINARY) $(SEND) $(RECV) $(PERF)
