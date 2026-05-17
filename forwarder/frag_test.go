@@ -70,7 +70,9 @@ func TestFragment_FragmentCount(t *testing.T) {
 	var encoded [][]byte
 	origEmit := func(buf []byte, txID [32]byte, subID [32]byte, hk, seq uint64, origLen uint32, idx, total uint16, data []byte) {
 		b := make([]byte, frame.HeaderSizeV3+len(data))
-		frame.EncodeFragment(b, txID, subID, hk, seq, origLen, idx, total, data)
+		if _, err := frame.EncodeFragment(b, txID, subID, hk, seq, origLen, idx, total, data); err != nil {
+			return
+		}
 		encoded = append(encoded, b)
 	}
 	_ = origEmit // use the method under test instead

@@ -96,8 +96,7 @@ func main() {
 	}
 
 	for i := 0; *count == 0 || i < *count; i++ {
-		var txID [32]byte
-		txID = sha256dOf(payload)
+		txID := sha256dOf(payload)
 		binary.BigEndian.PutUint32(txID[0:4], uint32(i))
 		if fragDataSize > 0 && len(payload) > fragDataSize {
 			sendFragments(conn, txID, payload, fragDataSize, uint64(i+1))
