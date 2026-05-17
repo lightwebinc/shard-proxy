@@ -3,9 +3,9 @@
 //
 // # Hot path
 //
-// [Forwarder.Process] decodes the ingress frame (BRC-12, BRC-124, or BRC-128), derives the
-// multicast group from the TxID, then for BRC-124/BRC-128 frames conditionally stamps
-// HashKey and SeqNum in-place at raw[40:48] and raw[48:56]:
+// [Forwarder.Process] decodes the ingress frame (BRC-12, BRC-124, or BRC-128),
+// derives the multicast group from the TxID, then for BRC-124/BRC-128 frames
+// conditionally stamps HashKey and SeqNum in-place at raw[40:48] and raw[48:56]:
 //
 //   - If SeqNum (raw[48:56]) is already non-zero the sender pre-stamped the
 //     frame; the proxy forwards it verbatim without modification.
@@ -13,6 +13,15 @@
 //     (stable per flow); SeqNum = per-(sender, group, subtree) monotonic counter
 //     starting at 1. Each subtree therefore owns an independent sequence so
 //     loss in one subtree cannot create false gaps in another.
+//
+// # BRC-130 fragmentation
+//
+// When [Forwarder.SetFragMTU] is called with a positive MTU, BRC-124/BRC-128
+// frames whose payload exceeds fragDataSize (= MTU − 40 − 8 − 104) are split
+// into K BRC-130 fragment datagrams instead of being forwarded verbatim.
+// Each fragment receives its own HashKey and SeqNum so it is independently
+// cacheable and retransmittable by the retry endpoint.
+// Frames at or below the threshold are forwarded verbatim.
 //
 // BRC-12 frames are always forwarded verbatim.
 //
@@ -57,16 +66,23 @@ type Target struct {
 	Conn  *net.UDPConn
 }
 
+// ipv6UDPOverhead is the fixed per-datagram overhead subtracted from the
+// path MTU to derive the fragment data capacity: 40 bytes IPv6 header +
+// 8 bytes UDP header + 104 bytes BRC-130 frame header.
+const ipv6UDPOverhead = 40 + 8 + 104
+
 // Forwarder decodes ingress frames (BRC-12 or BRC-124/BRC-128), derives the multicast
 // destination from the TxID, stamps HashKey/SeqNum for BRC-124/BRC-128 frames, and
+// optionally splits large payloads into BRC-130 fragment datagrams.
 type Forwarder struct {
-	engine     *shard.Engine
-	mcPrefix   uint16
-	mcGroupID  uint16
-	egressPort int
-	debug      bool
-	rec        *metrics.Recorder
-	log        *slog.Logger
+	engine       *shard.Engine
+	mcPrefix     uint16
+	mcGroupID    uint16
+	egressPort   int
+	debug        bool
+	rec          *metrics.Recorder
+	log          *slog.Logger
+	fragDataSize int // >0 = fragmentation enabled; fragment capacity per datagram
 
 	mu     sync.Mutex
 	chains map[chainKey]*flowState
@@ -136,6 +152,17 @@ func closeTargets(targets []Target, log *slog.Logger) {
 	}
 }
 
+// SetFragMTU enables BRC-130 fragmentation for the given path MTU.
+// Frames with payload larger than (mtu - 40 - 8 - 104) bytes are split into
+// multiple BRC-130 datagrams. Pass mtu <= 0 to disable fragmentation.
+func (fw *Forwarder) SetFragMTU(mtu int) {
+	if mtu > ipv6UDPOverhead {
+		fw.fragDataSize = mtu - ipv6UDPOverhead
+	} else {
+		fw.fragDataSize = 0
+	}
+}
+
 // Process is the hot path: decode raw for routing, conditionally stamp HashKey/SeqNum, then forward.
 //
 // For BRC-124/BRC-128 frames: if raw[48:56] (SeqNum) is non-zero the sender has
@@ -156,8 +183,16 @@ func (fw *Forwarder) Process(targets []Target, raw []byte, src net.Addr, workerI
 	groupIdx := fw.engine.GroupIndex(&f.TxID)
 
 	if f.Version == frame.FrameVerV2 && src != nil {
+		ip := addrToIPv6(src)
+
+		// BRC-130 fragmentation path: payload exceeds per-datagram capacity.
+		if fw.fragDataSize > 0 && len(f.Payload) > fw.fragDataSize {
+			fw.fragment(targets, f, ip, groupIdx, workerID)
+			return
+		}
+
+		// Standard BRC-124/BRC-128 path: stamp in-place if not pre-stamped.
 		if binary.BigEndian.Uint64(raw[48:56]) == 0 {
-			ip := addrToIPv6(src)
 			hashKey, seqNum := fw.nextSeq(ip, groupIdx, f.SubtreeID)
 			binary.BigEndian.PutUint64(raw[40:48], hashKey)
 			binary.BigEndian.PutUint64(raw[48:56], seqNum)
@@ -187,6 +222,87 @@ func (fw *Forwarder) Process(targets []Target, raw []byte, src net.Addr, workerI
 			"group_idx", groupIdx,
 			"src", src,
 			"dst", dst,
+		)
+	}
+}
+
+// fragment splits f.Payload into BRC-130 fragment datagrams and forwards each
+// to all targets. Each fragment receives an independent HashKey+SeqNum pair
+// allocated from the same flow as a regular frame would use.
+func (fw *Forwarder) fragment(targets []Target, f *frame.Frame, ip [16]byte, groupIdx uint32, workerID int) {
+	payload := f.Payload
+	origLen := uint32(len(payload))
+	dataSize := fw.fragDataSize
+
+	// Compute total fragment count.
+	k := (len(payload) + dataSize - 1) / dataSize
+	if k > 65535 {
+		// Pathologically large frame; drop and log.
+		fw.log.Warn("fragment count exceeds 65535, dropping frame",
+			"txid_prefix", fmt.Sprintf("%x", f.TxID[:4]),
+			"payload_len", len(payload),
+		)
+		if fw.rec != nil {
+			fw.rec.PacketDropped("", workerID, "frag_overflow")
+		}
+		return
+	}
+	if fw.rec != nil {
+		fw.rec.FrameFragmented(workerID, k)
+	}
+
+	fragTotal := uint16(k)
+	dst := fw.engine.Addr(groupIdx, fw.egressPort)
+	buf := make([]byte, frame.HeaderSizeV3+dataSize)
+
+	for i := 0; i < k; i++ {
+		start := i * dataSize
+		end := start + dataSize
+		if end > len(payload) {
+			end = len(payload)
+		}
+		fragData := payload[start:end]
+
+		hashKey, seqNum := fw.nextSeq(ip, groupIdx, f.SubtreeID)
+
+		n, err := frame.EncodeFragment(
+			buf,
+			f.TxID,
+			f.SubtreeID,
+			hashKey,
+			seqNum,
+			origLen,
+			uint16(i),
+			fragTotal,
+			fragData,
+		)
+		if err != nil {
+			fw.log.Error("EncodeFragment error", "err", err)
+			continue
+		}
+
+		for _, tgt := range targets {
+			dst.Zone = tgt.Iface.Name
+			if _, werr := tgt.Conn.WriteTo(buf[:n], dst); werr != nil {
+				fw.log.Warn("WriteTo fragment error", "iface", tgt.Iface.Name, "dst", dst, "err", werr)
+				if fw.rec != nil {
+					fw.rec.PacketDropped(tgt.Iface.Name, workerID, "write_error")
+					fw.rec.EgressError(tgt.Iface.Name, workerID)
+				}
+				continue
+			}
+			if fw.rec != nil {
+				fw.rec.PacketForwarded(tgt.Iface.Name, workerID, groupIdx, n)
+			}
+		}
+	}
+
+	if fw.debug {
+		fw.log.Debug("fragmented",
+			"txid_prefix", fmt.Sprintf("%x", f.TxID[:4]),
+			"group_idx", groupIdx,
+			"fragments", k,
+			"payload_len", origLen,
 		)
 	}
 }

@@ -121,6 +121,10 @@ func main() {
 
 	// Construct the shared forwarder.
 	fwd := forwarder.New(engine, cfg.MCPrefix, cfg.MCGroupID, cfg.EgressPort, cfg.Debug, rec)
+	if cfg.FragMTU > 0 {
+		fwd.SetFragMTU(cfg.FragMTU)
+		slog.Info("BRC-130 fragmentation enabled", "frag_mtu", cfg.FragMTU)
+	}
 
 	// done is closed to signal all workers to stop their receive loops.
 	done := make(chan struct{})

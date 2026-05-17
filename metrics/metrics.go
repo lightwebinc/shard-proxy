@@ -96,6 +96,10 @@ type Recorder struct {
 	activeGroupsMu sync.Mutex
 	activeGroups   map[string]map[uint32]struct{}
 
+	// Fragmentation counters (BRC-130)
+	framesFragmented metric.Int64Counter
+	fragmentsEmitted metric.Int64Counter
+
 	// Control-plane forwarding (TCP ingress + BRC-127)
 	ctrlFramesForwarded metric.Int64Counter
 	tcpConnections      metric.Int64Counter
@@ -285,6 +289,15 @@ func New(instanceID string, numWorkers int, otlpEndpoint string, otlpInterval ti
 		return nil, err
 	}
 
+	if r.framesFragmented, err = meter.Int64Counter("bsp_frames_fragmented_total",
+		metric.WithDescription("Frames that exceeded the fragmentation threshold and were split into BRC-130 fragments")); err != nil {
+		return nil, err
+	}
+	if r.fragmentsEmitted, err = meter.Int64Counter("bsp_fragments_emitted_total",
+		metric.WithDescription("Total BRC-130 fragment datagrams sent (K fragments per fragmented frame)")); err != nil {
+		return nil, err
+	}
+
 	if r.ctrlFramesForwarded, err = meter.Int64Counter("bsp_control_frames_forwarded_total",
 		metric.WithDescription("BRC-127 control datagrams forwarded to multicast (e.g. SubtreeAnnounce)")); err != nil {
 		return nil, err
@@ -337,6 +350,15 @@ func (r *Recorder) PacketForwarded(iface string, workerID int, groupIdx uint32, 
 	r.flowBytes.Add(ctx, int64(size), fopt)
 
 	r.trackGroup(iface, groupIdx)
+}
+
+// FrameFragmented records one frame that exceeded the fragmentation threshold.
+// k is the number of fragments it was split into.
+func (r *Recorder) FrameFragmented(workerID int, k int) {
+	opt := workerIfaceOpt("", workerID)
+	ctx := context.Background()
+	r.framesFragmented.Add(ctx, 1, opt)
+	r.fragmentsEmitted.Add(ctx, int64(k), opt)
 }
 
 // ControlFrameForwarded records a BRC-127 control datagram forwarded via ForwardControl.

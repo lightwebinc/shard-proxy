@@ -21,6 +21,7 @@
 //	-instance             INSTANCE_ID           hostname  OTel service.instance.id
 //	-otlp-endpoint        OTLP_ENDPOINT         ""        OTLP gRPC endpoint (empty = disabled)
 //	-otlp-interval        OTLP_INTERVAL         30s       OTLP push interval
+//	-frag-mtu             FRAG_MTU              0         Path MTU for BRC-130 fragmentation (0 = disabled)
 package config
 
 import (
@@ -70,6 +71,14 @@ type Config struct {
 	Debug        bool          // Enables per-packet debug logging and multicast loopback
 	DrainTimeout time.Duration // Pre-drain delay before closing ingress sockets; 0 = disabled
 
+	// Fragmentation (BRC-130)
+	// FragMTU is the path MTU used to derive the fragment data size per
+	// datagram (fragDataSize = FragMTU - 40 - 8 - 104). Frames whose payload
+	// exceeds fragDataSize are split into BRC-130 fragment datagrams.
+	// 0 disables fragmentation (frames are forwarded verbatim regardless of size).
+	// Typical value: 1500 (Ethernet), 9000 (jumbo frames).
+	FragMTU int
+
 	// Observability
 	MetricsAddr  string        // HTTP bind address for /metrics, /healthz, /readyz
 	InstanceID   string        // OTel service.instance.id for federation; defaults to hostname
@@ -106,6 +115,9 @@ func Load() (*Config, error) {
 		"enable per-packet debug logging and multicast loopback (single-host testing)")
 	flag.DurationVar(&c.DrainTimeout, "drain-timeout", envDuration("DRAIN_TIMEOUT", 0),
 		"pre-drain delay before closing ingress sockets; /readyz returns 503 during this window (0 = disabled)")
+	flag.IntVar(&c.FragMTU, "frag-mtu", envInt("FRAG_MTU", 0),
+		"path MTU for BRC-130 fragmentation (0 = disabled; typical: 1500 for Ethernet, 9000 for jumbo)")
+
 	flag.StringVar(&c.MetricsAddr, "metrics-addr", envStr("METRICS_ADDR", ":9100"),
 		"HTTP bind address for /metrics, /healthz, /readyz")
 	flag.StringVar(&c.InstanceID, "instance", envStr("INSTANCE_ID", ""),
