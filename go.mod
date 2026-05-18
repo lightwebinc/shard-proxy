@@ -3,7 +3,7 @@ module github.com/lightwebinc/bitcoin-shard-proxy
 go 1.25.10
 
 require (
-	github.com/lightwebinc/bitcoin-shard-common v0.7.0
+	github.com/lightwebinc/bitcoin-shard-common v0.7.1
 	github.com/prometheus/client_golang v1.23.2
 	go.opentelemetry.io/otel v1.42.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.42.0
