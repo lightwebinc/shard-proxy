@@ -70,7 +70,7 @@ func TestFragment_FragmentCount(t *testing.T) {
 	var encoded [][]byte
 	origEmit := func(buf []byte, txID [32]byte, subID [32]byte, hk, seq uint64, origLen uint32, idx, total uint16, data []byte) {
 		b := make([]byte, frame.HeaderSizeV3+len(data))
-		if _, err := frame.EncodeFragment(b, txID, subID, hk, seq, origLen, idx, total, data); err != nil {
+		if _, err := frame.EncodeFragment(b, txID, subID, hk, seq, origLen, idx, total, 0, data); err != nil {
 			return
 		}
 		encoded = append(encoded, b)
@@ -100,7 +100,7 @@ func TestFragment_FragmentCount(t *testing.T) {
 		if end > len(payload) {
 			end = len(payload)
 		}
-		n, err := frame.EncodeFragment(buf, txID, subID, uint64(i+10), uint64(i+1), origPayloadLen, uint16(i), 3, payload[start:end])
+		n, err := frame.EncodeFragment(buf, txID, subID, uint64(i+10), uint64(i+1), origPayloadLen, uint16(i), 3, 0, payload[start:end])
 		if err != nil {
 			t.Fatalf("EncodeFragment fragment %d: %v", i, err)
 		}
@@ -141,7 +141,7 @@ func TestFragment_LastFragmentSmaller(t *testing.T) {
 
 	// Encode last fragment manually.
 	lastData := payload[fragDataSize*2:]
-	n, err := frame.EncodeFragment(buf, txID, subID, 1, 3, origLen, 2, 3, lastData)
+	n, err := frame.EncodeFragment(buf, txID, subID, 1, 3, origLen, 2, 3, 0, lastData)
 	if err != nil {
 		t.Fatalf("EncodeFragment: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestFragment_TxIDPreserved(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		start := i * fragDataSize
 		end := start + fragDataSize
-		n, _ := frame.EncodeFragment(buf, txID, subID, 1, uint64(i+1), uint32(len(payload)), uint16(i), 2, payload[start:end])
+		n, _ := frame.EncodeFragment(buf, txID, subID, 1, uint64(i+1), uint32(len(payload)), uint16(i), 2, 0, payload[start:end])
 		ff, _ := frame.DecodeFragment(buf[:n])
 		if ff.TxID != txID {
 			t.Errorf("fragment %d: TxID mismatch", i)

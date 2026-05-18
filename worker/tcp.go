@@ -154,11 +154,11 @@ func (ti *TCPIngress) handleConn(conn net.Conn, targets []forwarder.Target) {
 			hdrSize = frame.HeaderSizeLegacy
 			payLen = int(uint32(hdrBuf[40])<<24 | uint32(hdrBuf[41])<<16 |
 				uint32(hdrBuf[42])<<8 | uint32(hdrBuf[43]))
-		case frame.FrameVerV2:
-			// Step 2: read the remaining 48 bytes to complete the 92-byte BRC-124/BRC-128 header
-			// (includes the 4-byte PayLen field at bytes 88–91).
+		case frame.FrameVerV2, frame.FrameVerV4:
+			// Step 2: read the remaining 48 bytes to complete the 92-byte header
+			// (BRC-124/BRC-128 or BRC-131 block control; includes PayLen at bytes 88–91).
 			if _, err := io.ReadFull(br, hdrBuf[frame.HeaderSizeLegacy:frame.HeaderSize]); err != nil {
-				ti.log.Debug("TCP read BRC-124/BRC-128 header extension error", "remote", remote, "err", err)
+				ti.log.Debug("TCP read header extension error", "remote", remote, "err", err)
 				return
 			}
 			hdrSize = frame.HeaderSize
@@ -183,6 +183,10 @@ func (ti *TCPIngress) handleConn(conn net.Conn, targets []forwarder.Target) {
 		if ti.rec != nil {
 			ti.rec.TCPBytesReceived(hdrSize + payLen)
 		}
-		ti.fwd.Process(targets, frameBuf, remote, -1)
+		if frameBuf[6] == frame.FrameVerV4 {
+			ti.fwd.ProcessBlock(targets, frameBuf, remote, -1)
+		} else {
+			ti.fwd.Process(targets, frameBuf, remote, -1)
+		}
 	}
 }

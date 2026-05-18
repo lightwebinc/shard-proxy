@@ -131,7 +131,7 @@ func sendFragments(conn net.Conn, txID [32]byte, payload []byte, dataSize int, s
 			end = len(payload)
 		}
 		fragData := payload[start:end]
-		n, err := frame.EncodeFragment(buf, txID, subID, 0xDEADBEEF01020304, seqBase+uint64(i), origLen, uint16(i), uint16(k), fragData)
+		n, err := frame.EncodeFragment(buf, txID, subID, 0xDEADBEEF01020304, seqBase+uint64(i), origLen, uint16(i), uint16(k), 0, fragData)
 		if err != nil {
 			log.Fatalf("EncodeFragment: %v", err)
 		}

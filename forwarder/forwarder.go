@@ -274,6 +274,7 @@ func (fw *Forwarder) fragment(targets []Target, f *frame.Frame, ip [16]byte, gro
 			origLen,
 			uint16(i),
 			fragTotal,
+			0, // OrigFrameVer: 0 = default to FrameVerV2
 			fragData,
 		)
 		if err != nil {
@@ -301,6 +302,155 @@ func (fw *Forwarder) fragment(targets []Target, f *frame.Frame, ip [16]byte, gro
 		fw.log.Debug("fragmented",
 			"txid_prefix", fmt.Sprintf("%x", f.TxID[:4]),
 			"group_idx", groupIdx,
+			"fragments", k,
+			"payload_len", origLen,
+		)
+	}
+}
+
+// ProcessBlock handles BRC-131 block control frames (FrameVer 0x04).
+// It validates the frame, stamps HashKey/SeqNum if needed, optionally
+// fragments large payloads via BRC-130, and forwards to the control
+// multicast group (CtrlGroupControl) instead of a shard group.
+func (fw *Forwarder) ProcessBlock(targets []Target, raw []byte, src net.Addr, workerID int) {
+	bf, err := frame.DecodeBlock(raw)
+	if err != nil {
+		fw.log.Debug("block frame decode error", "err", err, "len", len(raw))
+		if fw.rec != nil && len(targets) > 0 {
+			fw.rec.PacketDropped(targets[0].Iface.Name, workerID, "decode_error")
+		}
+		return
+	}
+
+	if src != nil {
+		ip := addrToIPv6(src)
+		ctrlIdx := uint32(shard.CtrlGroupControl)
+		var zeroSub [32]byte
+
+		// BRC-130 fragmentation path for large block payloads.
+		if fw.fragDataSize > 0 && len(bf.Payload) > fw.fragDataSize {
+			fw.fragmentBlock(targets, raw, bf, ip, ctrlIdx, workerID)
+			return
+		}
+
+		// Stamp HashKey/SeqNum in-place if not pre-stamped.
+		if binary.BigEndian.Uint64(raw[48:56]) == 0 {
+			hashKey, seqNum := fw.nextSeq(ip, ctrlIdx, zeroSub)
+			binary.BigEndian.PutUint64(raw[40:48], hashKey)
+			binary.BigEndian.PutUint64(raw[48:56], seqNum)
+		}
+	}
+
+	dst := shard.ControlGroupAddr(fw.mcPrefix, fw.mcGroupID, shard.CtrlGroupControl)
+	addr := &net.UDPAddr{IP: dst, Port: fw.egressPort}
+
+	for _, tgt := range targets {
+		addr.Zone = tgt.Iface.Name
+		if _, err := tgt.Conn.WriteTo(raw, addr); err != nil {
+			fw.log.Warn("WriteTo block error", "iface", tgt.Iface.Name, "dst", addr, "err", err)
+			if fw.rec != nil {
+				fw.rec.PacketDropped(tgt.Iface.Name, workerID, "write_error")
+				fw.rec.EgressError(tgt.Iface.Name, workerID)
+			}
+			continue
+		}
+		if fw.rec != nil {
+			fw.rec.ControlFrameForwarded("block_control")
+		}
+	}
+
+	if fw.debug {
+		fw.log.Debug("block forwarded",
+			"msg_type", bf.MsgType,
+			"content_id", fmt.Sprintf("%x", bf.ContentID[:8]),
+			"dst", addr,
+		)
+	}
+}
+
+// fragmentBlock splits a large BRC-131 block payload into BRC-130 fragments
+// and forwards each to the control group. Each fragment receives OrigFrameVer=0x04
+// so that reassembly can reconstruct the correct frame version.
+func (fw *Forwarder) fragmentBlock(targets []Target, raw []byte, bf *frame.BlockFrame, ip [16]byte, ctrlIdx uint32, workerID int) {
+	payload := bf.Payload
+	origLen := uint32(len(payload))
+	dataSize := fw.fragDataSize
+
+	k := (len(payload) + dataSize - 1) / dataSize
+	if k > 65535 {
+		fw.log.Warn("block fragment count exceeds 65535, dropping frame",
+			"content_id", fmt.Sprintf("%x", bf.ContentID[:8]),
+			"payload_len", len(payload),
+		)
+		if fw.rec != nil {
+			fw.rec.PacketDropped("", workerID, "frag_overflow")
+		}
+		return
+	}
+	if fw.rec != nil {
+		fw.rec.FrameFragmented(workerID, k)
+	}
+
+	// Build the ContentID (goes into TxID slot of BRC-130 header).
+	var contentID [32]byte
+	copy(contentID[:], bf.ContentID[:])
+	var zeroSub [32]byte
+
+	fragTotal := uint16(k)
+	dst := shard.ControlGroupAddr(fw.mcPrefix, fw.mcGroupID, shard.CtrlGroupControl)
+	addr := &net.UDPAddr{IP: dst, Port: fw.egressPort}
+	buf := make([]byte, frame.HeaderSizeV3+dataSize)
+
+	for i := 0; i < k; i++ {
+		start := i * dataSize
+		end := start + dataSize
+		if end > len(payload) {
+			end = len(payload)
+		}
+		fragData := payload[start:end]
+
+		hashKey, seqNum := fw.nextSeq(ip, ctrlIdx, zeroSub)
+
+		n, err := frame.EncodeFragment(
+			buf,
+			contentID,
+			zeroSub,
+			hashKey,
+			seqNum,
+			origLen,
+			uint16(i),
+			fragTotal,
+			frame.FrameVerV4, // OrigFrameVer: V4 block control
+			fragData,
+		)
+		if err != nil {
+			fw.log.Error("EncodeFragment block error", "err", err)
+			continue
+		}
+
+		// Write BlockMsgType into the Reserved byte (offset 7) so the
+		// reassembler can reconstruct the full V4 header.
+		buf[7] = raw[7]
+
+		for _, tgt := range targets {
+			addr.Zone = tgt.Iface.Name
+			if _, werr := tgt.Conn.WriteTo(buf[:n], addr); werr != nil {
+				fw.log.Warn("WriteTo block fragment error", "iface", tgt.Iface.Name, "dst", addr, "err", werr)
+				if fw.rec != nil {
+					fw.rec.PacketDropped(tgt.Iface.Name, workerID, "write_error")
+					fw.rec.EgressError(tgt.Iface.Name, workerID)
+				}
+				continue
+			}
+			if fw.rec != nil {
+				fw.rec.ControlFrameForwarded("block_control")
+			}
+		}
+	}
+
+	if fw.debug {
+		fw.log.Debug("block fragmented",
+			"content_id", fmt.Sprintf("%x", bf.ContentID[:8]),
 			"fragments", k,
 			"payload_len", origLen,
 		)
