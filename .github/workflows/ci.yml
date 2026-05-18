@@ -35,7 +35,9 @@ jobs:
         working-directory: bitcoin-shard-proxy
         run: |
           go mod tidy
-          git diff --exit-code go.sum
+          go mod edit -dropreplace github.com/lightwebinc/bitcoin-shard-common
+          git diff --exit-code go.mod
+          go mod edit -replace github.com/lightwebinc/bitcoin-shard-common=../bitcoin-shard-common
 
       - name: Build
         working-directory: bitcoin-shard-proxy
