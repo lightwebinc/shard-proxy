@@ -33,6 +33,10 @@ jobs:
         with:
           go-version-file: bitcoin-shard-proxy/go.mod
 
+      - name: Use local bitcoin-shard-common
+        working-directory: bitcoin-shard-proxy
+        run: go mod edit -replace github.com/lightwebinc/bitcoin-shard-common=../bitcoin-shard-common
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:

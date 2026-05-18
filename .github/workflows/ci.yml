@@ -27,11 +27,15 @@ jobs:
         with:
           go-version-file: bitcoin-shard-proxy/go.mod
 
+      - name: Use local bitcoin-shard-common
+        working-directory: bitcoin-shard-proxy
+        run: go mod edit -replace github.com/lightwebinc/bitcoin-shard-common=../bitcoin-shard-common
+
       - name: go mod tidy check
         working-directory: bitcoin-shard-proxy
         run: |
           go mod tidy
-          git diff --exit-code go.mod go.sum
+          git diff --exit-code go.sum
 
       - name: Build
         working-directory: bitcoin-shard-proxy
@@ -53,6 +57,10 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: bitcoin-shard-proxy/go.mod
+
+      - name: Use local bitcoin-shard-common
+        working-directory: bitcoin-shard-proxy
+        run: go mod edit -replace github.com/lightwebinc/bitcoin-shard-common=../bitcoin-shard-common
 
       - name: govulncheck
         working-directory: bitcoin-shard-proxy
@@ -76,6 +84,10 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: bitcoin-shard-proxy/go.mod
+
+      - name: Use local bitcoin-shard-common
+        working-directory: bitcoin-shard-proxy
+        run: go mod edit -replace github.com/lightwebinc/bitcoin-shard-common=../bitcoin-shard-common
 
       - name: go vet
         working-directory: bitcoin-shard-proxy
@@ -102,6 +114,10 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: bitcoin-shard-proxy/go.mod
+
+      - name: Use local bitcoin-shard-common
+        working-directory: bitcoin-shard-proxy
+        run: go mod edit -replace github.com/lightwebinc/bitcoin-shard-common=../bitcoin-shard-common
 
       - name: Unit tests
         working-directory: bitcoin-shard-proxy
