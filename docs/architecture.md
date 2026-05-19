@@ -2,17 +2,17 @@
 
 ## Overview
 
-bitcoin-shard-proxy receives BSV transaction frames (BRC-12, BRC-124, or BRC-128) over UDP (and
-optionally TCP), derives a deterministic multicast group address from each
-transaction's txid, then retransmits the original bytes verbatim to all
-configured egress interfaces.
+bitcoin-shard-proxy receives BSV transaction frames (BRC-12, BRC-124, BRC-128, BRC-131, or BRC-132)
+over UDP (and optionally TCP), derives a deterministic multicast group address from each
+transaction's txid (or routes to a fixed control-plane group for BRC-131/BRC-132), then
+retransmits the original bytes verbatim to all configured egress interfaces.
 
 See [docs/protocol.md](protocol.md) for the complete wire format specification.
 
 ```text
-sender  ──UDP/TCP──►  bitcoin-shard-proxy  ──UDP multicast──►  FF05::B:<shard>  (iface 0)
-                      (forwarder pipeline) └─────────────────►  FF05::B:<shard>  (iface 1)
-                                                                 (subset of subscribers)
+sender  ──UDP/TCP──►  bitcoin-shard-proxy  ──UDP multicast──►  FF05::B:<shard>  (data plane)
+                      (forwarder pipeline) ├─────────────────►  FF05::B:FFFE     (CtrlGroupControl, BRC-131)
+                                           └─────────────────►  FF05::B:FFFB     (CtrlGroupSubtreeAnnounce, BRC-132)
 ```
 
 ## Shard Address Derivation
@@ -28,6 +28,65 @@ Using top bits rather than modulo gives consistent-hashing: when `shardBits`
 increases by 1, every existing group splits into exactly two child groups.
 Subscribers join additional groups; existing subscriptions remain valid.
 
+## Control Groups
+
+BRC-131 and BRC-132 frames are routed to fixed control-plane multicast groups rather than
+shard-derived data-plane groups. The reserved indices (top of the 16-bit space, above
+`shard-bits` maximum of 15) are defined in `bitcoin-shard-common/shard/control.go`:
+
+| Constant | Index | Address (site scope, group-id `0x000B`) | Purpose |
+|---|---|---|---|
+| `CtrlGroupBlockHeader` | 0xFFFA | FF05::B:FFFA | Block header egress channel (stripped BRC-131 headers) |
+| `CtrlGroupSubtreeAnnounce` | 0xFFFB | FF05::B:FFFB | BRC-127 SubtreeAnnounce datagrams + BRC-132 subtree data |
+| `CtrlGroupSubtreeGroupAnnounce` | 0xFFFC | FF05::B:FFFC | BRC-127 subtree group membership announcements |
+| `CtrlGroupBeacon` | 0xFFFD | FF05::B:FFFD | ADVERT beacon (BRC-126 discovery) |
+| `CtrlGroupControl` | 0xFFFE | FF05::B:FFFE | BRC-131 block control frames |
+
+The `-shard-bits` limit of 15 ensures user shard indices (`0x0000`–`0x7FFF`) never overlap
+with control groups (`0xFFFA`–`0xFFFE`).
+
+## BRC-131 Block Control Frames (FrameVerV4)
+
+BRC-131 frames arrive via TCP ingress only (not UDP). `handleConn` reads the 92-byte header,
+detects version byte `0x04`, and calls `Forwarder.ProcessBlock`.
+
+`ProcessBlock`:
+- Validates via `frame.DecodeBlock`.
+- Stamps `HashKey` as `XXH64(senderIPv6 ∥ 0xFFFE ∥ zeros)` and `SeqNum` as a monotonic
+  per-flow counter when both are zero in the incoming frame.
+- Forwards the raw bytes verbatim to `CtrlGroupControl` (`FF0X::B:FFFE`) on all egress interfaces.
+- If the payload exceeds the BRC-130 fragment threshold, calls `fragmentBlock()` instead.
+  Each fragment carries `OrigFrameVer=0x04` so listeners route the reassembled payload to
+  their block processing path.
+
+Two `MsgType` values are defined (byte 7 of the header):
+
+| MsgType | Value | Payload |
+|---|---|---|
+| BlockAnnounce | 0x01 | 80-byte block header + CoinbaseTxID + subtree hashes |
+| CoinbaseTx | 0x02 | Raw serialised coinbase transaction |
+
+## BRC-132 Subtree Data Frames (FrameVerV5)
+
+BRC-132 frames arrive via TCP ingress; version byte `0x05`. `handleConn` calls
+`Forwarder.ProcessSubtreeData`.
+
+`ProcessSubtreeData`:
+- Validates via `frame.DecodeSubtreeData`.
+- Stamps `HashKey` as `XXH64(senderIPv6 ∥ 0xFFFB ∥ subtreeID)` and `SeqNum` as a monotonic
+  per-flow counter. The flow key incorporates `subtreeID` so each distinct subtree is
+  sequenced independently.
+- Forwards the raw bytes to `CtrlGroupSubtreeAnnounce` (`FF0X::B:FFFB`) on all egress interfaces.
+- If the payload exceeds the BRC-130 fragment threshold, calls `fragmentSubtreeData()`.
+  Each fragment carries `OrigFrameVer=0x05` and preserves the `MsgType` byte (offset 7).
+
+Two `MsgType` values are defined:
+
+| MsgType | Value | Payload |
+|---|---|---|
+| HashesOnly | 0x01 | 32 bytes per subtree node (SHA256 hash only) |
+| FullNodes | 0x02 | 48 bytes per subtree node (hash + fee + size metadata) |
+
 ## Multi-CPU Design
 
 Each UDP worker goroutine owns one ingress socket bound via `SO_REUSEPORT` plus
@@ -41,12 +100,23 @@ When `-tcp-listen-port` is non-zero, a single `TCPIngress` goroutine accepts
 connections and dispatches each connection to a per-connection goroutine. TCP
 and UDP share the same `forwarder.Forwarder` and egress targets.
 
+`handleConn` reads 44 bytes first (minimum header), then branches on the version byte:
+
+| Version byte | Frame type | Header total | Additional read | Dispatch |
+|---|---|---|---|---|
+| `0x01` (BRC-12) | Transaction | 44 bytes | `PayLen` bytes | `Process` |
+| `0x02` (BRC-124/BRC-128) | Transaction | 92 bytes | 48 more + `PayLen` | `Process` |
+| `0x04` (BRC-131) | Block control | 92 bytes | 48 more + `PayLen` | `ProcessBlock` |
+| `0x05` (BRC-132) | Subtree data | 92 bytes | 48 more + `PayLen` | `ProcessSubtreeData` |
+| `0x07` (BRC-127) | SubtreeAnnounce | 64 bytes | 20 more (no payload) | `ForwardControl` |
+
 ```
 senders (UDP)              proxy (N UDP workers + 1 TCP listener)
 ─────────────              ─────────────────────────────────────
-tx_a  ──UDP──▶ [worker 0] ─▶ forwarder ─▶ FF05::B:3 ──▶ sub_X
-tx_b  ──UDP──▶ [worker 1] ─▶ forwarder ─▶ FF05::B:1 ──▶ sub_Y
-tx_c  ──TCP──▶ [tcp conn] ─▶ forwarder ─▶ FF05::B:2 ──▶ sub_Z
+tx_a  ──UDP──▶ [worker 0] ─▶ forwarder ─▶ FF05::B:3    ──▶ sub_X   (shard, data-plane)
+tx_b  ──UDP──▶ [worker 1] ─▶ forwarder ─▶ FF05::B:1    ──▶ sub_Y
+blk_c ──TCP──▶ [tcp conn] ─▶ forwarder ─▶ FF05::B:FFFE ──▶ sub_Z   (CtrlGroupControl, BRC-131)
+sub_d ──TCP──▶ [tcp conn] ─▶ forwarder ─▶ FF05::B:FFFB ──▶ sub_W   (CtrlGroupSubtreeAnnounce, BRC-132)
 ```
 
 ## Wire Format
@@ -85,9 +155,50 @@ Offset  Size  Align  Field            Value / notes
 BRC-12 frames carry no `HashKey`, `SeqNum`, or `SubtreeID` fields.
 The proxy accepts them and forwards the original bytes unchanged.
 
+### BRC-131 (FrameVerV4 — 92-byte header, TCP only)
+
+Layout is identical to BRC-124/BRC-128 except for the version byte (0x04), the MsgType
+in the Reserved field (byte 7), and the ContentID semantics (block hash or coinbase txid
+instead of a transaction ID).
+
+```text
+Offset  Size  Align  Field          Value / notes
+------  ----  -----  -----          -------------
+     0     4   —     Network magic  0xE3E1F3E8
+     4     2   —     Protocol ver   0x02BF
+     6     1   —     Frame version  0x04 (BRC-131)
+     7     1   —     MsgType        0x01 = BlockAnnounce, 0x02 = CoinbaseTx
+     8    32   8B    ContentID      Block hash (Announce) or CoinbaseTxID (Coinbase)
+    40     8   8B    HashKey        Stamped by proxy; XXH64(senderIPv6 ∥ 0xFFFE ∥ zeros)
+    48     8   8B    SeqNum         Monotonic per (sender, 0xFFFE, zeros) flow; 0 = unset
+    56    32   8B    Reserved32     All zeros
+    88     4   —     PayloadLen     uint32 BE
+    92     *   —     Payload        BlockAnnounce or CoinbaseTx payload
+```
+
+### BRC-132 (FrameVerV5 — 92-byte header, TCP only)
+
+```text
+Offset  Size  Align  Field          Value / notes
+------  ----  -----  -----          -------------
+     0     4   —     Network magic  0xE3E1F3E8
+     4     2   —     Protocol ver   0x02BF
+     6     1   —     Frame version  0x05 (BRC-132)
+     7     1   —     MsgType        0x01 = HashesOnly, 0x02 = FullNodes
+     8    32   8B    SubtreeID      SHA-256 Merkle root; also used as ContentID
+    40     8   8B    HashKey        Stamped by proxy; XXH64(senderIPv6 ∥ 0xFFFB ∥ subtreeID)
+    48     8   8B    SeqNum         Monotonic per (sender, 0xFFFB, subtreeID) flow; 0 = unset
+    56    32   8B    LayoutPad32    All zeros
+    88     4   —     PayloadLen     uint32 BE
+    92     *   —     Payload        Subtree node data
+```
+
+The flow key includes `SubtreeID` so each distinct subtree is sequenced independently.
+
 ## Hot Path
 
-Every received datagram follows the same path:
+The hot path below applies to BRC-12/BRC-124/BRC-128 frames received via UDP:
+
 1. `frame.Decode(raw)` — extract the TxID; drop on bad magic or unknown version.
 2. **HashKey/SeqNum stamp (BRC-124/BRC-128 only)** — if `raw[48:56]` (SeqNum) is
    non-zero the sender has pre-stamped the frame; forward verbatim. Otherwise
@@ -97,6 +208,11 @@ Every received datagram follows the same path:
 3. `WriteTo(raw)` — write the raw bytes to every egress target.
 
 No re-encoding, no per-worker encode buffer.
+
+BRC-131 and BRC-132 frames received via TCP follow parallel paths through
+`ProcessBlock` and `ProcessSubtreeData` respectively. These functions perform the
+same in-place HashKey/SeqNum stamping and optional BRC-130 fragmentation, but
+route to fixed control-plane groups rather than shard-derived addresses.
 
 ## Graceful Shutdown
 
@@ -119,8 +235,11 @@ Shutdown proceeds in two phases when `SIGINT` or `SIGTERM` is received:
 bitcoin-shard-proxy/
   main.go            entry point; wires config → engine → forwarder → workers
   config/            runtime configuration (flags + env vars + validation)
-  forwarder/         decode → zero-copy verbatim forward pipeline
-  worker/            per-CPU SO_REUSEPORT ingress loop; TCP ingress listener
+  forwarder/         decode → zero-copy verbatim forward pipeline;
+                     Process (BRC-12/BRC-124/BRC-128), ProcessBlock (BRC-131),
+                     ProcessSubtreeData (BRC-132), BRC-130 fragmentation
+  worker/            per-CPU SO_REUSEPORT UDP ingress loop (worker.go);
+                     TCP ingress listener with BRC-131/BRC-132/BRC-127 routing (tcp.go)
   metrics/           OTel + Prometheus instrumentation
 ```
 
@@ -129,7 +248,8 @@ Protocol primitives are provided by
 
 ```
 bitcoin-shard-common/
-  frame/             BRC-12/BRC-124/BRC-128 wire format: Decode, Encode, constants, errors
-  shard/             txid → group index → IPv6 multicast address derivation
+  frame/             BRC-12/BRC-124/BRC-128/BRC-131/BRC-132 wire format: Decode, Encode, constants
+  shard/             txid → group index → IPv6 multicast address derivation;
+                     control group constants and ControlGroupAddr
   seqhash/           XXH64-based hash chain stamping
 ```
