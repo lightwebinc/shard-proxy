@@ -47,8 +47,8 @@ with control groups (`0xFFFA`–`0xFFFE`).
 
 ## BRC-131 Block Control Frames (FrameVerV4)
 
-BRC-131 frames arrive via TCP ingress only (not UDP). `handleConn` reads the 92-byte header,
-detects version byte `0x04`, and calls `Forwarder.ProcessBlock`.
+BRC-131 frames may arrive via UDP or TCP ingress. UDP workers inspect version byte `0x04`
+and call `Forwarder.ProcessBlock`; `handleConn` does the same on the TCP path.
 
 `ProcessBlock`:
 - Validates via `frame.DecodeBlock`.
@@ -68,8 +68,8 @@ Two `MsgType` values are defined (byte 7 of the header):
 
 ## BRC-132 Subtree Data Frames (FrameVerV5)
 
-BRC-132 frames arrive via TCP ingress; version byte `0x05`. `handleConn` calls
-`Forwarder.ProcessSubtreeData`.
+BRC-132 frames may arrive via UDP or TCP ingress; version byte `0x05`. UDP workers and
+`handleConn` both call `Forwarder.ProcessSubtreeData`.
 
 `ProcessSubtreeData`:
 - Validates via `frame.DecodeSubtreeData`.
@@ -111,12 +111,13 @@ and UDP share the same `forwarder.Forwarder` and egress targets.
 | `0x07` (BRC-127) | SubtreeAnnounce | 64 bytes | 20 more (no payload) | `ForwardControl` |
 
 ```
-senders (UDP)              proxy (N UDP workers + 1 TCP listener)
-─────────────              ─────────────────────────────────────
+senders (UDP/TCP)          proxy (N UDP workers + 1 TCP listener)
+─────────────────          ─────────────────────────────────────
 tx_a  ──UDP──▶ [worker 0] ─▶ forwarder ─▶ FF05::B:3    ──▶ sub_X   (shard, data-plane)
 tx_b  ──UDP──▶ [worker 1] ─▶ forwarder ─▶ FF05::B:1    ──▶ sub_Y
-blk_c ──TCP──▶ [tcp conn] ─▶ forwarder ─▶ FF05::B:FFFE ──▶ sub_Z   (CtrlGroupControl, BRC-131)
-sub_d ──TCP──▶ [tcp conn] ─▶ forwarder ─▶ FF05::B:FFFB ──▶ sub_W   (CtrlGroupSubtreeAnnounce, BRC-132)
+blk_c ──UDP──▶ [worker N] ─▶ forwarder ─▶ FF05::B:FFFE ──▶ sub_Z   (CtrlGroupControl, BRC-131)
+blk_d ──TCP──▶ [tcp conn] ─▶ forwarder ─▶ FF05::B:FFFE ──▶ sub_Z
+sub_e ──TCP──▶ [tcp conn] ─▶ forwarder ─▶ FF05::B:FFFB ──▶ sub_W   (CtrlGroupSubtreeAnnounce, BRC-132)
 ```
 
 ## Wire Format
@@ -155,7 +156,7 @@ Offset  Size  Align  Field            Value / notes
 BRC-12 frames carry no `HashKey`, `SeqNum`, or `SubtreeID` fields.
 The proxy accepts them and forwards the original bytes unchanged.
 
-### BRC-131 (FrameVerV4 — 92-byte header, TCP only)
+### BRC-131 (FrameVerV4 — 92-byte header)
 
 Layout is identical to BRC-124/BRC-128 except for the version byte (0x04), the MsgType
 in the Reserved field (byte 7), and the ContentID semantics (block hash or coinbase txid
@@ -176,7 +177,7 @@ Offset  Size  Align  Field          Value / notes
     92     *   —     Payload        BlockAnnounce or CoinbaseTx payload
 ```
 
-### BRC-132 (FrameVerV5 — 92-byte header, TCP only)
+### BRC-132 (FrameVerV5 — 92-byte header)
 
 ```text
 Offset  Size  Align  Field          Value / notes
@@ -209,7 +210,7 @@ The hot path below applies to BRC-12/BRC-124/BRC-128 frames received via UDP:
 
 No re-encoding, no per-worker encode buffer.
 
-BRC-131 and BRC-132 frames received via TCP follow parallel paths through
+BRC-131 and BRC-132 frames received via UDP or TCP follow parallel paths through
 `ProcessBlock` and `ProcessSubtreeData` respectively. These functions perform the
 same in-place HashKey/SeqNum stamping and optional BRC-130 fragmentation, but
 route to fixed control-plane groups rather than shard-derived addresses.
@@ -238,8 +239,8 @@ bitcoin-shard-proxy/
   forwarder/         decode → zero-copy verbatim forward pipeline;
                      Process (BRC-12/BRC-124/BRC-128), ProcessBlock (BRC-131),
                      ProcessSubtreeData (BRC-132), BRC-130 fragmentation
-  worker/            per-CPU SO_REUSEPORT UDP ingress loop (worker.go);
-                     TCP ingress listener with BRC-131/BRC-132/BRC-127 routing (tcp.go)
+  worker/            per-CPU SO_REUSEPORT UDP ingress loop with frame-version dispatch (worker.go);
+                     TCP ingress listener with BRC-127 routing (tcp.go)
   metrics/           OTel + Prometheus instrumentation
 ```
 

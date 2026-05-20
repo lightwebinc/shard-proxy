@@ -27,6 +27,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/lightwebinc/bitcoin-shard-common/frame"
 	"github.com/lightwebinc/bitcoin-shard-proxy/forwarder"
 	"github.com/lightwebinc/bitcoin-shard-proxy/metrics"
 )
@@ -171,7 +172,14 @@ func (w *Worker) Run(listenAddr string, listenPort int, done <-chan struct{}) er
 		if w.rec != nil && len(targets) > 0 {
 			w.rec.PacketReceived(targets[0].Iface.Name, w.id, n)
 		}
-		w.fwd.Process(targets, buf[:n], src, w.id)
+		switch {
+		case n > 6 && buf[6] == frame.FrameVerV4:
+			w.fwd.ProcessBlock(targets, buf[:n], src, w.id)
+		case n > 6 && buf[6] == frame.FrameVerV5:
+			w.fwd.ProcessSubtreeData(targets, buf[:n], src, w.id)
+		default:
+			w.fwd.Process(targets, buf[:n], src, w.id)
+		}
 	}
 }
 
