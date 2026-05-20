@@ -385,12 +385,16 @@ func (fw *Forwarder) ProcessAnchor(targets []Target, raw []byte, src net.Addr, w
 
 	if src != nil {
 		ip := addrToIPv6(src)
-		ctrlIdx := uint32(shard.CtrlGroupControl)
+		// Anchor frames use a dedicated virtual group index (0xFFF9) for
+		// HashKey derivation so they get their own independent SeqNum counter
+		// and flow identity, distinct from BRC-131 block frames which share
+		// the same CtrlGroupControl multicast address.
+		const anchorGroupIdx = uint32(0xFFF9)
 		var zeroSub [32]byte
 
 		// Stamp HashKey/SeqNum in-place if not pre-stamped.
 		if binary.BigEndian.Uint64(raw[48:56]) == 0 {
-			hashKey, seqNum := fw.nextSeq(ip, ctrlIdx, zeroSub)
+			hashKey, seqNum := fw.nextSeq(ip, anchorGroupIdx, zeroSub)
 			binary.BigEndian.PutUint64(raw[40:48], hashKey)
 			binary.BigEndian.PutUint64(raw[48:56], seqNum)
 		}

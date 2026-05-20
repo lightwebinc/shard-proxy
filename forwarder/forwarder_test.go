@@ -425,16 +425,15 @@ func TestProcessAnchor_DecodeError_Drops(t *testing.T) {
 	fw.ProcessAnchor(nil, bad, src, 0)
 }
 
-// ── anchor flow shares CtrlGroupControl with block control ────────────────────
+// ── anchor flow uses dedicated groupIdx, distinct from block control ──────────
 
-func TestProcessAnchor_SameFlowKeyAsBlock(t *testing.T) {
+func TestProcessAnchor_DistinctFlowFromBlock(t *testing.T) {
 	fw := makeForwarder()
 	src := &net.UDPAddr{IP: net.ParseIP("::1"), Port: 1}
 
-	// An anchor frame and a block frame from the same sender both use
-	// CtrlGroupControl (0xFFFE) and zero SubtreeID as the flow key, so they
-	// share a HashKey but have independent SeqNum counters (different flows
-	// because TxID/ContentID differs). Verify HashKeys match.
+	// Anchor frames use a virtual groupIdx (0xFFF9) for HashKey derivation
+	// so they get their own independent flow identity and SeqNum counter,
+	// distinct from BRC-131 block frames (which use CtrlGroupControl 0xFFFE).
 	rawAnchor := buildAnchorFrame(t, 0xAA, 0, nil)
 	rawBlock := buildBlockBufForwarder(t, 0xBB, nil)
 	fw.ProcessAnchor(nil, rawAnchor, src, 0)
@@ -442,8 +441,18 @@ func TestProcessAnchor_SameFlowKeyAsBlock(t *testing.T) {
 
 	hkAnchor := binary.BigEndian.Uint64(rawAnchor[40:48])
 	hkBlock := binary.BigEndian.Uint64(rawBlock[40:48])
-	if hkAnchor != hkBlock {
-		t.Errorf("anchor HashKey %x != block HashKey %x; both use CtrlGroupControl+zeros flow key", hkAnchor, hkBlock)
+	if hkAnchor == hkBlock {
+		t.Errorf("anchor HashKey %x == block HashKey %x; expected distinct flows", hkAnchor, hkBlock)
+	}
+
+	// Both should start at SeqNum 1 (independent counters).
+	seqAnchor := binary.BigEndian.Uint64(rawAnchor[48:56])
+	seqBlock := binary.BigEndian.Uint64(rawBlock[48:56])
+	if seqAnchor != 1 {
+		t.Errorf("anchor SeqNum = %d, want 1", seqAnchor)
+	}
+	if seqBlock != 1 {
+		t.Errorf("block SeqNum = %d, want 1", seqBlock)
 	}
 }
 
