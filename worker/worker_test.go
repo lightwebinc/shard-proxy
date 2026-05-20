@@ -27,6 +27,7 @@ func TestNew(t *testing.T) {
 	w := New(0, fwd, ifaces, nil)
 	if w == nil {
 		t.Fatal("New returned nil")
+		return
 	}
 	if w.id != 0 {
 		t.Errorf("id = %d, want 0", w.id)
@@ -150,6 +151,7 @@ func TestNewTCPIngress(t *testing.T) {
 	ti := NewTCPIngress(fwd, ifaces, nil)
 	if ti == nil {
 		t.Fatal("NewTCPIngress returned nil")
+		return
 	}
 	if ti.fwd == nil {
 		t.Error("fwd should not be nil")
