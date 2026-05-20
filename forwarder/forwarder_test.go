@@ -301,6 +301,170 @@ func TestOpenTargetsProbe(t *testing.T) {
 	CloseTargets(targets, slog.Default())
 }
 
+// ── ProcessAnchor — BRC-134 ──────────────────────────────────────────────────
+
+// buildAnchorFrame builds a minimal BRC-134 anchor transaction frame. It encodes
+// using frame.Encode (FrameVerV2 layout) then patches the version byte to 0x06.
+func buildAnchorFrame(t *testing.T, txidByte0 byte, seqNum uint64, payload []byte) []byte {
+	t.Helper()
+	f := &frame.Frame{
+		SeqNum:  seqNum,
+		Payload: payload,
+	}
+	f.TxID[0] = txidByte0
+	buf := make([]byte, frame.HeaderSize+len(payload))
+	n, err := frame.Encode(f, buf)
+	if err != nil {
+		t.Fatalf("frame.Encode: %v", err)
+	}
+	buf[6] = frame.FrameVerV6 // promote to anchor version
+	return buf[:n]
+}
+
+func TestProcessAnchor_StampsHashKeyAndSeqNum(t *testing.T) {
+	fw := makeForwarder()
+	src := &net.UDPAddr{IP: net.ParseIP("::1"), Port: 12345}
+
+	// First frame: HashKey must be non-zero, SeqNum must be 1.
+	raw1 := buildAnchorFrame(t, 0xAB, 0, []byte("anchor-tx-1"))
+	fw.ProcessAnchor(nil, raw1, src, 0)
+
+	hk1 := binary.BigEndian.Uint64(raw1[40:48])
+	seq1 := binary.BigEndian.Uint64(raw1[48:56])
+	if hk1 == 0 {
+		t.Errorf("frame 1: HashKey = 0 after stamping, want non-zero")
+	}
+	if seq1 != 1 {
+		t.Errorf("frame 1: SeqNum = %d, want 1", seq1)
+	}
+
+	// Second frame from same sender: same HashKey, SeqNum increments to 2.
+	raw2 := buildAnchorFrame(t, 0xCD, 0, []byte("anchor-tx-2"))
+	fw.ProcessAnchor(nil, raw2, src, 0)
+
+	hk2 := binary.BigEndian.Uint64(raw2[40:48])
+	seq2 := binary.BigEndian.Uint64(raw2[48:56])
+	if hk2 != hk1 {
+		t.Errorf("frame 2: HashKey = %d, want %d (stable per flow)", hk2, hk1)
+	}
+	if seq2 != 2 {
+		t.Errorf("frame 2: SeqNum = %d, want 2", seq2)
+	}
+}
+
+func TestProcessAnchor_PreStamped_NotOverwritten(t *testing.T) {
+	fw := makeForwarder()
+	src := &net.UDPAddr{IP: net.ParseIP("::1"), Port: 1}
+
+	const preHashKey uint64 = 0xDEADBEEFCAFEBABE
+	const preSeqNum uint64 = 99
+
+	raw := buildAnchorFrame(t, 0x11, preSeqNum, nil)
+	binary.BigEndian.PutUint64(raw[40:48], preHashKey) // pre-stamp HashKey too
+
+	fw.ProcessAnchor(nil, raw, src, 0)
+
+	hk := binary.BigEndian.Uint64(raw[40:48])
+	seq := binary.BigEndian.Uint64(raw[48:56])
+	if hk != preHashKey {
+		t.Errorf("HashKey = %x, want %x (pre-stamped must not be overwritten)", hk, preHashKey)
+	}
+	if seq != preSeqNum {
+		t.Errorf("SeqNum = %d, want %d (pre-stamped must not be overwritten)", seq, preSeqNum)
+	}
+}
+
+func TestProcessAnchor_DifferentSenders_IndependentFlows(t *testing.T) {
+	fw := makeForwarder()
+	src1 := &net.UDPAddr{IP: net.ParseIP("::1"), Port: 1}
+	src2 := &net.UDPAddr{IP: net.ParseIP("::2"), Port: 2}
+
+	raw1 := buildAnchorFrame(t, 0xAB, 0, nil)
+	raw2 := buildAnchorFrame(t, 0xAB, 0, nil)
+	fw.ProcessAnchor(nil, raw1, src1, 0)
+	fw.ProcessAnchor(nil, raw2, src2, 0)
+
+	// Both flows start at SeqNum=1.
+	seq1 := binary.BigEndian.Uint64(raw1[48:56])
+	seq2 := binary.BigEndian.Uint64(raw2[48:56])
+	if seq1 != 1 || seq2 != 1 {
+		t.Errorf("src1 SeqNum=%d src2 SeqNum=%d, both want 1 (fresh flows)", seq1, seq2)
+	}
+	// HashKeys differ because sender IP inputs differ.
+	hk1 := binary.BigEndian.Uint64(raw1[40:48])
+	hk2 := binary.BigEndian.Uint64(raw2[40:48])
+	if hk1 == hk2 {
+		t.Errorf("HashKey for distinct senders should differ, both got %x", hk1)
+	}
+}
+
+func TestProcessAnchor_NilSrc_SkipsStamping(t *testing.T) {
+	fw := makeForwarder()
+
+	raw := buildAnchorFrame(t, 0x55, 0, nil) // SeqNum=0 means unstamped
+	fw.ProcessAnchor(nil, raw, nil, 0)
+
+	// With nil src the proxy does not stamp — HashKey and SeqNum remain 0.
+	hk := binary.BigEndian.Uint64(raw[40:48])
+	seq := binary.BigEndian.Uint64(raw[48:56])
+	if hk != 0 {
+		t.Errorf("nil src: HashKey = %x, want 0 (no stamping)", hk)
+	}
+	if seq != 0 {
+		t.Errorf("nil src: SeqNum = %d, want 0 (no stamping)", seq)
+	}
+}
+
+func TestProcessAnchor_DecodeError_Drops(t *testing.T) {
+	fw := makeForwarder()
+	src := &net.UDPAddr{IP: net.ParseIP("::1"), Port: 1}
+
+	// Bad magic — should be silently dropped, not panic.
+	bad := make([]byte, frame.HeaderSize)
+	bad[6] = frame.FrameVerV6
+	fw.ProcessAnchor(nil, bad, src, 0)
+}
+
+// ── anchor flow shares CtrlGroupControl with block control ────────────────────
+
+func TestProcessAnchor_SameFlowKeyAsBlock(t *testing.T) {
+	fw := makeForwarder()
+	src := &net.UDPAddr{IP: net.ParseIP("::1"), Port: 1}
+
+	// An anchor frame and a block frame from the same sender both use
+	// CtrlGroupControl (0xFFFE) and zero SubtreeID as the flow key, so they
+	// share a HashKey but have independent SeqNum counters (different flows
+	// because TxID/ContentID differs). Verify HashKeys match.
+	rawAnchor := buildAnchorFrame(t, 0xAA, 0, nil)
+	rawBlock := buildBlockBufForwarder(t, 0xBB, nil)
+	fw.ProcessAnchor(nil, rawAnchor, src, 0)
+	fw.ProcessBlock(nil, rawBlock, src, 0)
+
+	hkAnchor := binary.BigEndian.Uint64(rawAnchor[40:48])
+	hkBlock := binary.BigEndian.Uint64(rawBlock[40:48])
+	if hkAnchor != hkBlock {
+		t.Errorf("anchor HashKey %x != block HashKey %x; both use CtrlGroupControl+zeros flow key", hkAnchor, hkBlock)
+	}
+}
+
+// buildBlockBufForwarder constructs a minimal valid BRC-131 BlockMsgAnnounce
+// frame for use in forwarder tests.
+func buildBlockBufForwarder(t *testing.T, contentIDByte byte, payload []byte) []byte {
+	t.Helper()
+	if payload == nil {
+		payload = []byte("blk")
+	}
+	buf := make([]byte, frame.HeaderSize+len(payload))
+	binary.BigEndian.PutUint32(buf[0:4], frame.MagicBSV)
+	binary.BigEndian.PutUint16(buf[4:6], frame.ProtoVer)
+	buf[6] = frame.FrameVerV4
+	buf[7] = frame.BlockMsgAnnounce
+	buf[8] = contentIDByte
+	binary.BigEndian.PutUint32(buf[88:92], uint32(len(payload)))
+	copy(buf[frame.HeaderSize:], payload)
+	return buf
+}
+
 // ── isErrno ───────────────────────────────────────────────────────────────────
 
 func TestIsErrnoMatch(t *testing.T) {

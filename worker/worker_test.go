@@ -311,3 +311,46 @@ func TestHandleConnV2LargePayload(t *testing.T) {
 		_, _ = conn.Write(raw)
 	})
 }
+
+// ── BRC-134 anchor transaction frames (FrameVerV6) ────────────────────────────
+
+// buildV6AnchorTCPFrame builds a BRC-134 anchor transaction frame for TCP tests.
+// It uses the same 92-byte header layout as BRC-124 but with version byte 0x06.
+func buildV6AnchorTCPFrame(t *testing.T, txidByte byte, payload []byte) []byte {
+	t.Helper()
+	f := &frame.Frame{Payload: payload}
+	f.TxID[0] = txidByte
+	buf := make([]byte, frame.HeaderSize+len(payload))
+	n, err := frame.Encode(f, buf)
+	if err != nil {
+		t.Fatalf("frame.Encode: %v", err)
+	}
+	buf[6] = frame.FrameVerV6 // promote to anchor version
+	return buf[:n]
+}
+
+func TestHandleConnV6AnchorFrame(t *testing.T) {
+	// A valid BRC-134 anchor frame must be accepted and processed without panic
+	// or hang. The TCP handler reads the 92-byte header (detecting V6 via the
+	// shared 92-byte read case) and dispatches to ProcessAnchor.
+	raw := buildV6AnchorTCPFrame(t, 0xAB, []byte("anchor-tx-payload"))
+	dialHandleConn(t, func(conn net.Conn) {
+		_, _ = conn.Write(raw)
+	})
+}
+
+func TestHandleConnV6AnchorFrame_EmptyPayload(t *testing.T) {
+	raw := buildV6AnchorTCPFrame(t, 0xCD, nil)
+	dialHandleConn(t, func(conn net.Conn) {
+		_, _ = conn.Write(raw)
+	})
+}
+
+func TestHandleConnV6AnchorFrame_TruncatedHeader(t *testing.T) {
+	// Only the first 44 bytes (HeaderSizeLegacy) — missing the 48-byte extension.
+	// handleConn must close the connection gracefully without panic.
+	raw := buildV6AnchorTCPFrame(t, 0xEF, nil)
+	dialHandleConn(t, func(conn net.Conn) {
+		_, _ = conn.Write(raw[:frame.HeaderSizeLegacy]) // send only legacy portion
+	})
+}
