@@ -12,7 +12,8 @@ See [docs/protocol.md](protocol.md) for the complete wire format specification.
 ```text
 sender  ──UDP/TCP──►  bitcoin-shard-proxy  ──UDP multicast──►  FF05::B:<shard>  (data plane)
                       (forwarder pipeline) ├─────────────────►  FF05::B:FFFE     (CtrlGroupControl, BRC-131)
-                                           └─────────────────►  FF05::B:FFFB     (CtrlGroupSubtreeAnnounce, BRC-132)
+                                           ├─────────────────►  FF05::B:FFFB     (CtrlGroupSubtreeAnnounce, BRC-132)
+                                           └─────────────────►  FF05::B:FFFC     (CtrlGroupSubtreeGroupAnnounce, BRC-127)
 ```
 
 ## Shard Address Derivation
@@ -37,8 +38,8 @@ shard-derived data-plane groups. The reserved indices (top of the 16-bit space, 
 | Constant | Index | Address (site scope, group-id `0x000B`) | Purpose |
 |---|---|---|---|
 | `CtrlGroupBlockHeader` | 0xFFFA | FF05::B:FFFA | Block header egress channel (stripped BRC-131 headers) |
-| `CtrlGroupSubtreeAnnounce` | 0xFFFB | FF05::B:FFFB | BRC-127 SubtreeAnnounce datagrams + BRC-132 subtree data |
-| `CtrlGroupSubtreeGroupAnnounce` | 0xFFFC | FF05::B:FFFC | BRC-127 subtree group membership announcements |
+| `CtrlGroupSubtreeAnnounce` | 0xFFFB | FF05::B:FFFB | BRC-132 subtree data frames |
+| `CtrlGroupSubtreeGroupAnnounce` | 0xFFFC | FF05::B:FFFC | BRC-127 subtree group announcements |
 | `CtrlGroupBeacon` | 0xFFFD | FF05::B:FFFD | ADVERT beacon (BRC-126 discovery) |
 | `CtrlGroupControl` | 0xFFFE | FF05::B:FFFE | BRC-131 block control frames |
 
