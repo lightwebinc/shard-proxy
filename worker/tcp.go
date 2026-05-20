@@ -154,7 +154,7 @@ func (ti *TCPIngress) handleConn(conn net.Conn, targets []forwarder.Target) {
 			hdrSize = frame.HeaderSizeLegacy
 			payLen = int(uint32(hdrBuf[40])<<24 | uint32(hdrBuf[41])<<16 |
 				uint32(hdrBuf[42])<<8 | uint32(hdrBuf[43]))
-		case frame.FrameVerV2, frame.FrameVerV4, frame.FrameVerV5:
+		case frame.FrameVerV2, frame.FrameVerV4, frame.FrameVerV5, frame.FrameVerV6:
 			// Step 2: read the remaining 48 bytes to complete the 92-byte header
 			// (BRC-124/BRC-128, BRC-131 block control, or BRC-132 subtree data;
 			// includes PayLen at bytes 88–91).
@@ -189,6 +189,8 @@ func (ti *TCPIngress) handleConn(conn net.Conn, targets []forwarder.Target) {
 			ti.fwd.ProcessBlock(targets, frameBuf, remote, -1)
 		case frame.FrameVerV5:
 			ti.fwd.ProcessSubtreeData(targets, frameBuf, remote, -1)
+		case frame.FrameVerV6:
+			ti.fwd.ProcessAnchor(targets, frameBuf, remote, -1)
 		default:
 			ti.fwd.Process(targets, frameBuf, remote, -1)
 		}

@@ -368,6 +368,60 @@ func (fw *Forwarder) ProcessBlock(targets []Target, raw []byte, src net.Addr, wo
 	}
 }
 
+// ProcessAnchor handles BRC-134 chained anchor transaction frames (FrameVer 0x06).
+// Anchor transactions are the root of a chain of dependent transactions and
+// must reach every subscriber regardless of shard assignment. They are
+// validated, HashKey/SeqNum-stamped, and forwarded to CtrlGroupControl
+// (FF0E::B:FFFE) — the same control-plane group as BRC-131 block frames.
+func (fw *Forwarder) ProcessAnchor(targets []Target, raw []byte, src net.Addr, workerID int) {
+	f, err := frame.DecodeAnchor(raw)
+	if err != nil {
+		fw.log.Debug("anchor frame decode error", "err", err, "len", len(raw))
+		if fw.rec != nil && len(targets) > 0 {
+			fw.rec.PacketDropped(targets[0].Iface.Name, workerID, "decode_error")
+		}
+		return
+	}
+
+	if src != nil {
+		ip := addrToIPv6(src)
+		ctrlIdx := uint32(shard.CtrlGroupControl)
+		var zeroSub [32]byte
+
+		// Stamp HashKey/SeqNum in-place if not pre-stamped.
+		if binary.BigEndian.Uint64(raw[48:56]) == 0 {
+			hashKey, seqNum := fw.nextSeq(ip, ctrlIdx, zeroSub)
+			binary.BigEndian.PutUint64(raw[40:48], hashKey)
+			binary.BigEndian.PutUint64(raw[48:56], seqNum)
+		}
+	}
+
+	dst := shard.ControlGroupAddr(fw.mcPrefix, fw.mcGroupID, shard.CtrlGroupControl)
+	addr := &net.UDPAddr{IP: dst, Port: fw.egressPort}
+
+	for _, tgt := range targets {
+		addr.Zone = tgt.Iface.Name
+		if _, err := tgt.Conn.WriteTo(raw, addr); err != nil {
+			fw.log.Warn("WriteTo anchor error", "iface", tgt.Iface.Name, "dst", addr, "err", err)
+			if fw.rec != nil {
+				fw.rec.PacketDropped(tgt.Iface.Name, workerID, "write_error")
+				fw.rec.EgressError(tgt.Iface.Name, workerID)
+			}
+			continue
+		}
+		if fw.rec != nil {
+			fw.rec.ControlFrameForwarded("anchor")
+		}
+	}
+
+	if fw.debug {
+		fw.log.Debug("anchor forwarded",
+			"txid", fmt.Sprintf("%x", f.TxID[:8]),
+			"dst", addr,
+		)
+	}
+}
+
 // fragmentBlock splits a large BRC-131 block payload into BRC-130 fragments
 // and forwards each to the control group. Each fragment receives OrigFrameVer=0x04
 // so that reassembly can reconstruct the correct frame version.

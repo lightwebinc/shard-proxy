@@ -177,6 +177,8 @@ func (w *Worker) Run(listenAddr string, listenPort int, done <-chan struct{}) er
 			w.fwd.ProcessBlock(targets, buf[:n], src, w.id)
 		case n > 6 && buf[6] == frame.FrameVerV5:
 			w.fwd.ProcessSubtreeData(targets, buf[:n], src, w.id)
+		case n > 6 && buf[6] == frame.FrameVerV6:
+			w.fwd.ProcessAnchor(targets, buf[:n], src, w.id)
 		default:
 			w.fwd.Process(targets, buf[:n], src, w.id)
 		}
