@@ -95,6 +95,11 @@ through unchanged.
 For **BRC-12 (legacy) frames**, the proxy always forwards the original bytes verbatim without
 any modification.
 
+For **BRC-134 anchor frames** (`FrameVerV6`), the proxy forwards to `CtrlGroupControl`
+(`FF0X::B:FFFE`). Anchor frames use a virtual `groupIdx` of `0xFFF9` for HashKey derivation
+so anchors are accounted as an independent flow (label `brc134`) distinct from BRC-131 block
+control. See [bitcoin-multicast/docs/brc-134-anchor-transactions.md](../../../bitcoin-multicast/docs/brc-134-anchor-transactions.md).
+
 ---
 
 ## Multicast Scope

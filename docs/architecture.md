@@ -2,16 +2,20 @@
 
 ## Overview
 
-bitcoin-shard-proxy receives BSV transaction frames (BRC-12, BRC-124, BRC-128, BRC-131, or BRC-132)
-over UDP (and optionally TCP), derives a deterministic multicast group address from each
-transaction's txid (or routes to a fixed control-plane group for BRC-131/BRC-132), then
-retransmits the original bytes verbatim to all configured egress interfaces.
+bitcoin-shard-proxy receives BSV transaction frames (BRC-12, BRC-124, BRC-128, BRC-131,
+BRC-132, or BRC-134) over UDP (and optionally TCP), derives a deterministic multicast group
+address from each transaction's txid (or routes to a fixed control-plane group for
+BRC-131/BRC-132/BRC-134), then retransmits the original bytes verbatim to all configured
+egress interfaces.
 
-See [docs/protocol.md](protocol.md) for the complete wire format specification.
+Foundational concepts (shard hierarchy, anycast ingress, frame versions) live in
+[multicast-skills/architecture.md](../../multicast-skills/architecture.md) and
+[multicast-skills/protocol.md](../../multicast-skills/protocol.md); BRC wire formats in
+[bitcoin-multicast/docs/](../../bitcoin-multicast/docs/).
 
 ```text
 sender  ──UDP/TCP──►  bitcoin-shard-proxy  ──UDP multicast──►  FF05::B:<shard>  (data plane)
-                      (forwarder pipeline) ├─────────────────►  FF05::B:FFFE     (CtrlGroupControl, BRC-131)
+                      (forwarder pipeline) ├─────────────────►  FF05::B:FFFE     (CtrlGroupControl, BRC-131/134)
                                            ├─────────────────►  FF05::B:FFFB     (CtrlGroupSubtreeAnnounce, BRC-132)
                                            └─────────────────►  FF05::B:FFFC     (CtrlGroupSubtreeGroupAnnounce, BRC-127)
 ```
