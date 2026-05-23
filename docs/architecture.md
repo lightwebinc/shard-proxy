@@ -295,5 +295,5 @@ bitcoin-shard-common/
   frame/             BRC-12/BRC-124/BRC-128/BRC-131/BRC-132 wire format: Decode, Encode, constants
   shard/             txid → group index → IPv6 multicast address derivation;
                      control group constants and ControlGroupAddr
-  seqhash/           XXH64-based hash chain stamping
+  seqhash/           XXH64 per-flow HashKey computation (senderIPv6 ∥ groupIdx ∥ subtreeID)
 ```
