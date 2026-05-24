@@ -14,8 +14,8 @@ Foundational concepts (shard hierarchy, anycast ingress, frame versions) live in
 [bitcoin-multicast/docs/](../../bitcoin-multicast/docs/).
 
 ```text
-sender  ──UDP/TCP──►  bitcoin-shard-proxy  ──UDP multicast──►  FF05::B:<shard>  (data plane)
-                      (forwarder pipeline) ├─────────────────►  FF05::B:FFFE     (CtrlGroupControl, BRC-131/134)
+sender  ──UDP/TCP──►  bitcoin-shard-proxy  ──UDP multicast──►  FF05::B:<shard>  (data plane, configurable scope)
+                      (forwarder pipeline) ├─────────────────►  FF0E::B:FFFE     (CtrlGroupControl, BRC-131/134, always global)
                                            ├─────────────────►  FF05::B:FFFB     (CtrlGroupSubtreeAnnounce, BRC-132)
                                            └─────────────────►  FF05::B:FFFC     (CtrlGroupSubtreeGroupAnnounce, BRC-127)
 ```
@@ -39,13 +39,15 @@ BRC-131 and BRC-132 frames are routed to fixed control-plane multicast groups ra
 shard-derived data-plane groups. The reserved indices (top of the 16-bit space, above
 `shard-bits` maximum of 15) are defined in `bitcoin-shard-common/shard/control.go`:
 
-| Constant | Index | Address (site scope, group-id `0x000B`) | Purpose |
+| Constant | Index | Canonical Address (group-id `0x000B`) | Purpose |
 |---|---|---|---|
-| `CtrlGroupBlockHeader` | 0xFFFA | FF05::B:FFFA | Block header egress channel (stripped BRC-131 headers) |
-| `CtrlGroupSubtreeAnnounce` | 0xFFFB | FF05::B:FFFB | BRC-132 subtree data frames |
-| `CtrlGroupSubtreeGroupAnnounce` | 0xFFFC | FF05::B:FFFC | BRC-127 subtree group announcements |
-| `CtrlGroupBeacon` | 0xFFFD | FF05::B:FFFD | ADVERT beacon (BRC-126 discovery) |
-| `CtrlGroupControl` | 0xFFFE | FF05::B:FFFE | BRC-131 block control frames |
+| `CtrlGroupBlockHeader` | 0xFFFA | egress-scope `FF0X::<egress-gid>:FFFA` | Block header egress channel (BRC-135) |
+| `CtrlGroupSubtreeAnnounce` | 0xFFFB | FF05::B:FFFB (data-plane scope) | BRC-132 subtree data frames |
+| `CtrlGroupSubtreeGroupAnnounce` | 0xFFFC | FF05::B:FFFC (data-plane scope) | BRC-127 subtree group announcements |
+| `CtrlGroupBeacon` | 0xFFFD | FF05::B:FFFD (site) / FF0E::B:FFFD (global) | ADVERT beacon (BRC-126 discovery) |
+| `CtrlGroupControl` | 0xFFFE | **FF0E::B:FFFE (always global)** | BRC-131 block control + BRC-134 anchor frames |
+
+Per BRC-129 §3, `CtrlGroupControl` uses **global scope (FF0E)** regardless of the data-plane scope, because block headers, coinbase, and anchor transactions must reach every subscriber across organisational boundaries.
 
 The `-shard-bits` limit of 15 ensures user shard indices (`0x0000`–`0x7FFF`) never overlap
 with control groups (`0xFFFA`–`0xFFFE`).
@@ -128,16 +130,18 @@ and UDP share the same `forwarder.Forwarder` and egress targets.
 | `0x04` (BRC-131) | Block control | 92 bytes | 48 more + `PayLen` | `ProcessBlock` |
 | `0x05` (BRC-132) | Subtree data | 92 bytes | 48 more + `PayLen` | `ProcessSubtreeData` |
 | `0x06` (BRC-134) | Anchor tx | 92 bytes | 48 more + `PayLen` | `ProcessAnchor` |
-| `0x07` (BRC-127) | SubtreeAnnounce | 64 bytes | 20 more (no payload) | `ForwardControl` |
+| `0x30` (MsgType, BRC-127) | SubtreeAnnounce | 64 bytes | 20 more (no payload) | `ForwardControl` |
+
+> The dispatcher branches on `hdrBuf[6]`. For BRC-12/124/131/132/134 this byte is the Frame Version (`0x01`/`0x02`/`0x04`/`0x05`/`0x06`); for BRC-127 it is the MsgType byte (`0x30 = MsgTypeSubtreeAnnounce`).
 
 ```
 senders (UDP/TCP)          proxy (N UDP workers + 1 TCP listener)
 ─────────────────          ─────────────────────────────────────
 tx_a  ──UDP──▶ [worker 0] ─▶ forwarder ─▶ FF05::B:3    ──▶ sub_X   (shard, data-plane)
 tx_b  ──UDP──▶ [worker 1] ─▶ forwarder ─▶ FF05::B:1    ──▶ sub_Y
-blk_c ──UDP──▶ [worker N] ─▶ forwarder ─▶ FF05::B:FFFE ──▶ sub_Z   (CtrlGroupControl, BRC-131)
-blk_d ──TCP──▶ [tcp conn] ─▶ forwarder ─▶ FF05::B:FFFE ──▶ sub_Z
-anc_e ──UDP──▶ [worker N] ─▶ forwarder ─▶ FF05::B:FFFE ──▶ sub_Z   (CtrlGroupControl, BRC-134)
+blk_c ──UDP──▶ [worker N] ─▶ forwarder ─▶ FF0E::B:FFFE ──▶ sub_Z   (CtrlGroupControl, BRC-131)
+blk_d ──TCP──▶ [tcp conn] ─▶ forwarder ─▶ FF0E::B:FFFE ──▶ sub_Z
+anc_e ──UDP──▶ [worker N] ─▶ forwarder ─▶ FF0E::B:FFFE ──▶ sub_Z   (CtrlGroupControl, BRC-134)
 sub_f ──TCP──▶ [tcp conn] ─▶ forwarder ─▶ FF05::B:FFFB ──▶ sub_W   (CtrlGroupSubtreeAnnounce, BRC-132)
 ```
 
