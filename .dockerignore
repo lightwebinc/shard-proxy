@@ -1,0 +1,11 @@
+.git
+.github
+.githooks
+.golangci.yml
+build/
+ci/
+docs/
+test/
+*.md
+NOTICE
+LICENSE

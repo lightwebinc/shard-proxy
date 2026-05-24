@@ -10,8 +10,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: build
+  ci:
+    name: ci (dagger)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: bitcoin-shard-proxy
+
+      - uses: actions/checkout@v6
+        with:
+          repository: lightwebinc/bitcoin-shard-common
+          path: bitcoin-shard-common
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: bitcoin-shard-proxy/go.mod
+          cache: false
+
+      - name: Run Dagger pipeline
+        working-directory: bitcoin-shard-proxy
+        env:
+          GOWORK: "off"
+        run: make ci
+
+  e2e:
+    name: e2e (host)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -30,100 +54,6 @@ jobs:
       - name: Use local bitcoin-shard-common
         working-directory: bitcoin-shard-proxy
         run: go mod edit -replace github.com/lightwebinc/bitcoin-shard-common=../bitcoin-shard-common
-
-      - name: go mod tidy check
-        working-directory: bitcoin-shard-proxy
-        run: |
-          go mod tidy
-          go mod edit -dropreplace github.com/lightwebinc/bitcoin-shard-common
-          git diff --exit-code go.mod
-          go mod edit -replace github.com/lightwebinc/bitcoin-shard-common=../bitcoin-shard-common
-
-      - name: Build
-        working-directory: bitcoin-shard-proxy
-        run: go build -buildvcs=false ./...
-
-  security:
-    name: security
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          path: bitcoin-shard-proxy
-
-      - uses: actions/checkout@v6
-        with:
-          repository: lightwebinc/bitcoin-shard-common
-          path: bitcoin-shard-common
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: bitcoin-shard-proxy/go.mod
-
-      - name: Use local bitcoin-shard-common
-        working-directory: bitcoin-shard-proxy
-        run: go mod edit -replace github.com/lightwebinc/bitcoin-shard-common=../bitcoin-shard-common
-
-      - name: govulncheck
-        working-directory: bitcoin-shard-proxy
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          govulncheck ./...
-
-  lint:
-    name: lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          path: bitcoin-shard-proxy
-
-      - uses: actions/checkout@v6
-        with:
-          repository: lightwebinc/bitcoin-shard-common
-          path: bitcoin-shard-common
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: bitcoin-shard-proxy/go.mod
-
-      - name: Use local bitcoin-shard-common
-        working-directory: bitcoin-shard-proxy
-        run: go mod edit -replace github.com/lightwebinc/bitcoin-shard-common=../bitcoin-shard-common
-
-      - name: go vet
-        working-directory: bitcoin-shard-proxy
-        run: go vet ./...
-
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v7
-        with:
-          working-directory: bitcoin-shard-proxy
-
-  test:
-    name: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          path: bitcoin-shard-proxy
-
-      - uses: actions/checkout@v6
-        with:
-          repository: lightwebinc/bitcoin-shard-common
-          path: bitcoin-shard-common
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: bitcoin-shard-proxy/go.mod
-
-      - name: Use local bitcoin-shard-common
-        working-directory: bitcoin-shard-proxy
-        run: go mod edit -replace github.com/lightwebinc/bitcoin-shard-common=../bitcoin-shard-common
-
-      - name: Unit tests
-        working-directory: bitcoin-shard-proxy
-        run: go test -race ./...
 
       - name: Install curl
         run: sudo apt-get install -y --no-install-recommends curl

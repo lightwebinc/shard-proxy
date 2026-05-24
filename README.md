@@ -71,6 +71,13 @@ With TCP ingress enabled:
 
 See [docs/configuration.md](docs/configuration.md) for all flags and environment variable equivalents.
 
+## Container image
+
+The Dockerfile produces a `gcr.io/distroless/static:nonroot` image with the
+single static binary at `/usr/local/bin/bitcoin-shard-proxy`. No in-image
+`ENV` defaults are set — configure via Helm `values.yaml`, container
+environment variables, or CLI flags.
+
 ## Helm chart
 
 A Kubernetes Helm chart is published from a dedicated chart repository:

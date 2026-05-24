@@ -1,34 +1,31 @@
-FROM golang:1.25 AS builder
+# syntax=docker/dockerfile:1.7
+#
+# Canonical multi-stage Dockerfile for bitcoin-shard-proxy.
+# Final image: distroless/static:nonroot, no in-image ENV defaults
+# (configure via Helm values.yaml or container env at runtime).
 
+FROM golang:1.25-alpine AS builder
+RUN apk add --no-cache git ca-certificates
 WORKDIR /src
+
+# Module cache layer
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 
+# Build
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -o /bitcoin-shard-proxy .
+ARG VERSION=dev
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -buildvcs=false \
+      -ldflags "-s -w -X github.com/lightwebinc/bitcoin-shard-proxy/metrics.Version=${VERSION}" \
+      -o /out/bitcoin-shard-proxy .
 
-FROM ubuntu:24.04
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY --from=builder /bitcoin-shard-proxy /usr/local/bin/bitcoin-shard-proxy
-
-ENV LISTEN_ADDR="[::]" \
-    UDP_LISTEN_PORT="9000" \
-    TCP_LISTEN_PORT="0" \
-    MULTICAST_IF="eth0" \
-    EGRESS_PORT="9001" \
-    SHARD_BITS="2" \
-    MC_SCOPE="site" \
-    MC_GROUP_ID="0x000B" \
-    NUM_WORKERS="" \
-    FRAG_MTU="0" \
-    DRAIN_TIMEOUT="0s" \
-    METRICS_ADDR=":9100" \
-    INSTANCE_ID="" \
-    OTLP_ENDPOINT="" \
-    OTLP_INTERVAL="30s"
-
-ENTRYPOINT ["bitcoin-shard-proxy"]
+FROM gcr.io/distroless/static:nonroot
+USER nonroot:nonroot
+COPY --from=builder /out/bitcoin-shard-proxy /usr/local/bin/bitcoin-shard-proxy
+ENTRYPOINT ["/usr/local/bin/bitcoin-shard-proxy"]
