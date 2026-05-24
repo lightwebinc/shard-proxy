@@ -6,13 +6,8 @@
 set -euo pipefail
 
 echo "pre-commit: gofmt..."
-unformatted=$(gofmt -l .)
-if [[ -n "$unformatted" ]]; then
-  echo "ERROR: the following files need gofmt:"
-  printf '  %s\n' $unformatted
-  echo "Run: gofmt -w ."
-  exit 1
-fi
+gofmt -w .
+git add -u
 
 echo "pre-commit: go vet..."
 go vet ./...
