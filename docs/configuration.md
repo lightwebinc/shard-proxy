@@ -227,3 +227,9 @@ FF05::CAFE:<shard_index>          # With overridden group-id 0xCAFE
 Doubling `SHARD_BITS` splits every existing group into two children —
 subscribers join additional groups without invalidating existing ones,
 so scale-up requires no redesign.
+
+## Helm chart
+
+Every flag documented in this file is exposed under `.config` in the corresponding Helm chart's `values.yaml`. See the chart repository for installation snippets and the `values.schema.json` for validation rules.
+
+Chart: [`lightwebinc/bitcoin-shard-proxy-helm`](https://github.com/lightwebinc/bitcoin-shard-proxy-helm)

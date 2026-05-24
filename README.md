@@ -71,6 +71,20 @@ With TCP ingress enabled:
 
 See [docs/configuration.md](docs/configuration.md) for all flags and environment variable equivalents.
 
+## Helm chart
+
+A Kubernetes Helm chart is published from a dedicated chart repository:
+
+- Repository: [`lightwebinc/bitcoin-shard-proxy-helm`](https://github.com/lightwebinc/bitcoin-shard-proxy-helm)
+- HTTPS:
+  ```
+  helm repo add bsp https://lightwebinc.github.io/bitcoin-shard-proxy-helm
+  helm install proxy bsp/bitcoin-shard-proxy
+  ```
+- OCI: `helm install proxy oci://ghcr.io/lightwebinc/charts/bitcoin-shard-proxy --version 0.1.0`
+
+Every flag accepted by this binary is exposed under `.config` in the chart's `values.yaml`. See the chart README for the full reference and `values.schema.json` for validation rules.
+
 ## License
 
 Apache 2.0 - See LICENSE file.
