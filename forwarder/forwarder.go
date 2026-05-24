@@ -191,12 +191,11 @@ func (fw *Forwarder) Process(targets []Target, raw []byte, src net.Addr, workerI
 			return
 		}
 
-		// Standard BRC-124/BRC-128 path: stamp in-place if not pre-stamped.
-		if binary.BigEndian.Uint64(raw[48:56]) == 0 {
-			hashKey, seqNum := fw.nextSeq(ip, groupIdx, f.SubtreeID)
-			binary.BigEndian.PutUint64(raw[40:48], hashKey)
-			binary.BigEndian.PutUint64(raw[48:56], seqNum)
-		}
+		// Standard BRC-124/BRC-128 path: stamp HashKey and SeqNum
+		// independently. The gap-injection load generator pre-stamps
+		// SeqNum but leaves HashKey=0, so we must stamp HashKey
+		// whenever it is zero regardless of SeqNum.
+		stampInPlace(raw, ip, groupIdx, f.SubtreeID, fw)
 	}
 
 	dst := fw.engine.Addr(groupIdx, fw.egressPort)
@@ -333,12 +332,10 @@ func (fw *Forwarder) ProcessBlock(targets []Target, raw []byte, src net.Addr, wo
 			return
 		}
 
-		// Stamp HashKey/SeqNum in-place if not pre-stamped.
-		if binary.BigEndian.Uint64(raw[48:56]) == 0 {
-			hashKey, seqNum := fw.nextSeq(ip, ctrlIdx, zeroSub)
-			binary.BigEndian.PutUint64(raw[40:48], hashKey)
-			binary.BigEndian.PutUint64(raw[48:56], seqNum)
-		}
+		// Stamp HashKey/SeqNum in-place; HashKey is stamped even when SeqNum
+		// is pre-set (e.g. gap injection in subtx-gen) so the chain rate
+		// limiter and per-flow cache keys are well-defined.
+		stampInPlace(raw, ip, ctrlIdx, zeroSub, fw)
 	}
 
 	dst := shard.ControlGroupAddr(fw.mcPrefix, fw.mcGroupID, shard.CtrlGroupControl)
@@ -392,12 +389,9 @@ func (fw *Forwarder) ProcessAnchor(targets []Target, raw []byte, src net.Addr, w
 		const anchorGroupIdx = uint32(0xFFF9)
 		var zeroSub [32]byte
 
-		// Stamp HashKey/SeqNum in-place if not pre-stamped.
-		if binary.BigEndian.Uint64(raw[48:56]) == 0 {
-			hashKey, seqNum := fw.nextSeq(ip, anchorGroupIdx, zeroSub)
-			binary.BigEndian.PutUint64(raw[40:48], hashKey)
-			binary.BigEndian.PutUint64(raw[48:56], seqNum)
-		}
+		// Stamp HashKey/SeqNum in-place; HashKey is stamped even when SeqNum
+		// is pre-set so chain RL and cache keys are deterministic.
+		stampInPlace(raw, ip, anchorGroupIdx, zeroSub, fw)
 	}
 
 	dst := shard.ControlGroupAddr(fw.mcPrefix, fw.mcGroupID, shard.CtrlGroupControl)
@@ -539,13 +533,9 @@ func (fw *Forwarder) ProcessSubtreeData(targets []Target, raw []byte, src net.Ad
 			return
 		}
 
-		// Stamp HashKey/SeqNum in-place if not pre-stamped.
-		// SubtreeID is read from bytes 8–39 (the ContentID slot).
-		if binary.BigEndian.Uint64(raw[48:56]) == 0 {
-			hashKey, seqNum := fw.nextSeq(ip, ctrlIdx, sf.SubtreeID)
-			binary.BigEndian.PutUint64(raw[40:48], hashKey)
-			binary.BigEndian.PutUint64(raw[48:56], seqNum)
-		}
+		// Stamp HashKey/SeqNum in-place; HashKey is stamped even when SeqNum
+		// is pre-set so chain RL and cache keys are deterministic.
+		stampInPlace(raw, ip, ctrlIdx, sf.SubtreeID, fw)
 	}
 
 	dst := shard.ControlGroupAddr(fw.mcPrefix, fw.mcGroupID, shard.CtrlGroupSubtreeAnnounce)
@@ -706,6 +696,28 @@ func ctrlGroupName(idx uint16) string {
 		return "control"
 	default:
 		return fmt.Sprintf("0x%04x", idx)
+	}
+}
+
+// stampInPlace stamps the HashKey (raw[40:48]) and SeqNum (raw[48:56]) header
+// fields in-place if they are zero. HashKey is always re-derivable from
+// (senderIP, groupIdx, subtreeID), so we stamp it whenever it is zero,
+// independent of whether SeqNum was pre-stamped by the sender. SeqNum is only
+// stamped (and the flow counter advanced) when it is zero — pre-stamped
+// SeqNums are preserved verbatim (used by gap injection in subtx-gen).
+func stampInPlace(raw []byte, ip [16]byte, groupIdx uint32, subtreeID [32]byte, fw *Forwarder) {
+	preSeq := binary.BigEndian.Uint64(raw[48:56])
+	preHash := binary.BigEndian.Uint64(raw[40:48])
+	if preSeq == 0 {
+		hashKey, seqNum := fw.nextSeq(ip, groupIdx, subtreeID)
+		binary.BigEndian.PutUint64(raw[40:48], hashKey)
+		binary.BigEndian.PutUint64(raw[48:56], seqNum)
+		return
+	}
+	if preHash == 0 {
+		// SeqNum was pre-stamped by the sender (e.g. gap-injection mode);
+		// derive and stamp HashKey without advancing the flow counter.
+		binary.BigEndian.PutUint64(raw[40:48], seqhash.Hash(ip, groupIdx, subtreeID))
 	}
 }
 
