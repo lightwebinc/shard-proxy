@@ -71,6 +71,18 @@ type Target struct {
 // 8 bytes UDP header + 104 bytes BRC-130 frame header.
 const ipv6UDPOverhead = 40 + 8 + 104
 
+// TxidDedup is the minimal interface a TxID claim store must satisfy. It is
+// satisfied by *txidset.Store from bitcoin-shard-common; the forwarder depends
+// only on this interface so that tests can inject lightweight fakes.
+//
+// Claim must report (true, nil) when the caller wins the claim (proceed),
+// (false, nil) when another claimant already holds the TxID (suppress), or
+// (true, err) on Redis error (fail-open). Errors are surfaced through Recorder
+// callbacks supplied to the Store rather than re-reported by the forwarder.
+type TxidDedup interface {
+	Claim(prefix string, txid [32]byte) (bool, error)
+}
+
 // Forwarder decodes ingress frames (BRC-12 or BRC-124/BRC-128), derives the multicast
 // destination from the TxID, stamps HashKey/SeqNum for BRC-124/BRC-128 frames, and
 // optionally splits large payloads into BRC-130 fragment datagrams.
@@ -84,8 +96,46 @@ type Forwarder struct {
 	log          *slog.Logger
 	fragDataSize int // >0 = fragmentation enabled; fragment capacity per datagram
 
+	// Ingress TxID dedup (nil = disabled). When non-nil, every BRC-124/128,
+	// BRC-131 block, BRC-132 subtree data, and BRC-134 anchor frame claims
+	// its TxID/ContentID in the configured namespace before stamping; if the
+	// claim is lost (another proxy or listener already published this TxID)
+	// the frame is dropped instead of multicast.
+	txDedup       TxidDedup
+	txDedupPrefix string
+
 	mu     sync.Mutex
 	chains map[chainKey]*flowState
+}
+
+// SetTxidDedup attaches a TxID claim store used to suppress ingress
+// duplicates before multicast. prefix is the Redis key prefix associated
+// with the proxy ingress namespace (typically "bsp:tx:"). Pass nil to
+// disable. Must be called before any worker goroutine starts processing.
+func (fw *Forwarder) SetTxidDedup(d TxidDedup, prefix string) {
+	fw.txDedup = d
+	fw.txDedupPrefix = prefix
+}
+
+// claimIngress consults the configured TxID dedup store. Returns true when
+// the caller should proceed (claim won or dedup disabled or fail-open) and
+// false when the frame must be suppressed. The frameType label is used for
+// the suppression metric.
+func (fw *Forwarder) claimIngress(txid [32]byte, frameType, iface string, workerID int) bool {
+	if fw.txDedup == nil {
+		return true
+	}
+	claimed, _ := fw.txDedup.Claim(fw.txDedupPrefix, txid)
+	if claimed {
+		return true
+	}
+	if fw.rec != nil {
+		fw.rec.IngressDeduped(iface, workerID, frameType)
+	}
+	if fw.debug {
+		fw.log.Debug("ingress dedup suppressed", "frame_type", frameType, "txid_prefix", fmt.Sprintf("%x", txid[:8]))
+	}
+	return false
 }
 
 // New creates a Forwarder. No sockets are opened here; call [OpenTargets] in
@@ -178,6 +228,20 @@ func (fw *Forwarder) Process(targets []Target, raw []byte, src net.Addr, workerI
 			fw.rec.PacketDropped(targets[0].Iface.Name, workerID, "decode_error")
 		}
 		return
+	}
+
+	// Ingress TxID dedup gate. BRC-124/BRC-128 (V2) frames claim by TxID;
+	// legacy BRC-12 (V1) frames pass through unconditionally because the
+	// V1 wire format does not carry a stable per-flow identifier and
+	// listeners cannot dedup them downstream either.
+	if f.Version == frame.FrameVerV2 {
+		ifaceName := ""
+		if len(targets) > 0 {
+			ifaceName = targets[0].Iface.Name
+		}
+		if !fw.claimIngress(f.TxID, "brc124", ifaceName, workerID) {
+			return
+		}
 	}
 
 	groupIdx := fw.engine.GroupIndex(&f.TxID)
@@ -321,6 +385,19 @@ func (fw *Forwarder) ProcessBlock(targets []Target, raw []byte, src net.Addr, wo
 		return
 	}
 
+	// Ingress TxID dedup gate. BRC-131 block frames carry a ContentID
+	// (block hash) in the TxID slot; we treat it as the TxID for dedup
+	// purposes so the same block is never multicasted twice by sibling proxies.
+	{
+		ifaceName := ""
+		if len(targets) > 0 {
+			ifaceName = targets[0].Iface.Name
+		}
+		if !fw.claimIngress(bf.ContentID, "brc131", ifaceName, workerID) {
+			return
+		}
+	}
+
 	if src != nil {
 		ip := addrToIPv6(src)
 		ctrlIdx := uint32(shard.CtrlGroupControl)
@@ -378,6 +455,17 @@ func (fw *Forwarder) ProcessAnchor(targets []Target, raw []byte, src net.Addr, w
 			fw.rec.PacketDropped(targets[0].Iface.Name, workerID, "decode_error")
 		}
 		return
+	}
+
+	// Ingress TxID dedup gate for BRC-134 anchor frames.
+	{
+		ifaceName := ""
+		if len(targets) > 0 {
+			ifaceName = targets[0].Iface.Name
+		}
+		if !fw.claimIngress(f.TxID, "brc134", ifaceName, workerID) {
+			return
+		}
 	}
 
 	if src != nil {
@@ -521,6 +609,19 @@ func (fw *Forwarder) ProcessSubtreeData(targets []Target, raw []byte, src net.Ad
 			fw.rec.PacketDropped(targets[0].Iface.Name, workerID, "decode_error")
 		}
 		return
+	}
+
+	// Ingress TxID dedup gate for BRC-132 subtree data frames. The SubtreeID
+	// is the stable per-payload identifier (parallel role to TxID for V2/V6
+	// or ContentID for V4).
+	{
+		ifaceName := ""
+		if len(targets) > 0 {
+			ifaceName = targets[0].Iface.Name
+		}
+		if !fw.claimIngress(sf.SubtreeID, "brc132", ifaceName, workerID) {
+			return
+		}
 	}
 
 	if src != nil {

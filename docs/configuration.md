@@ -228,6 +228,51 @@ Doubling `SHARD_BITS` splits every existing group into two children —
 subscribers join additional groups without invalidating existing ones,
 so scale-up requires no redesign.
 
+## Ingress TxID dedup
+
+The proxy can optionally suppress duplicate ingress frames before stamping
+and multicasting. A two-tier claim store is consulted on every BRC-124/128
+(V2), BRC-131 block (V4), BRC-132 subtree data (V5), and BRC-134 anchor (V6)
+frame. Legacy BRC-12 (V1) frames bypass the gate.
+
+- **Tier 1** — in-process LRU keyed by TxID. Memory bounded by
+  `-txid-dedup-local-cap` (default 1 048 576 entries, ~50 MiB). A hit
+  short-circuits and the frame is dropped without contacting Redis.
+- **Tier 2** — Redis `SETNX EX`. Activated only when
+  `-txid-dedup-redis-addr` is non-empty. On a tier-1 miss the proxy claims
+  `<prefix><hex-txid>` in Redis; on win it forwards, on loss it drops.
+  Errors fail open (frame is forwarded; a metric is recorded).
+
+### Flags
+
+| Flag | Env | Default | Notes |
+|------|-----|---------|-------|
+| `-txid-dedup-redis-addr` | `TXID_DEDUP_REDIS_ADDR` | `""` | Empty disables tier-2 (local-only) |
+| `-txid-dedup-prefix` | `TXID_DEDUP_PREFIX` | `bsp:tx:` | Must match the local listener's `-ingress-set-prefix` for collapsed deployments |
+| `-txid-dedup-ttl` | `TXID_DEDUP_TTL` | `10m` | Range 1m – 30m typical |
+| `-txid-dedup-local-cap` | `TXID_DEDUP_LOCAL_CAP` | `1048576` | 0 disables the feature entirely |
+
+### Topology guidance
+
+- **Single proxy, no Redis** — leave `-txid-dedup-redis-addr` empty. The
+  tier-1 LRU still suppresses local repeats (e.g. multiple upstream peers
+  forwarding the same TxID).
+- **Multiple proxies at one site** — point all proxies at the same Redis.
+  Whichever proxy wins the SETNX multicasts; siblings drop.
+- **Listener marks the ingress set** — when the local listener has
+  `-mark-ingress-set` enabled, its courtesy SETNX populates the same
+  namespace, so a TxID delivered via cross-site bridge prevents the local
+  proxy from re-multicasting it.
+
+### Metrics
+
+- `bsp_ingress_deduped_total{frame_type, worker, network.interface.name}` —
+  frames suppressed by the gate.
+- `bsp_txid_claim_local_hit_total{prefix}` — tier-1 short-circuits.
+- `bsp_txid_claim_won_total{prefix}` / `bsp_txid_claim_lost_total{prefix}` —
+  tier-2 SETNX outcomes.
+- `bsp_txid_claim_errors_total{prefix}` — Redis errors (fail-open).
+
 ## Helm chart
 
 Every flag documented in this file is exposed under `.config` in the corresponding Helm chart's `values.yaml`. See the chart repository for installation snippets and the `values.schema.json` for validation rules.

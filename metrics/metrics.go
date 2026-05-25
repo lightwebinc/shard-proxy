@@ -105,6 +105,13 @@ type Recorder struct {
 	tcpConnections      metric.Int64Counter
 	tcpBytesReceived    metric.Int64Counter
 
+	// Ingress TxID dedup
+	ingressDeduped    metric.Int64Counter // by worker, iface, frame_type
+	txidClaimLocalHit metric.Int64Counter
+	txidClaimWon      metric.Int64Counter
+	txidClaimLost     metric.Int64Counter
+	txidClaimError    metric.Int64Counter
+
 	// Per-(iface, group) MeasurementOption cache
 	attrCache sync.Map
 
@@ -312,6 +319,27 @@ func New(instanceID string, numWorkers int, otlpEndpoint string, otlpInterval ti
 		return nil, err
 	}
 
+	if r.ingressDeduped, err = meter.Int64Counter("bsp_ingress_deduped_total",
+		metric.WithDescription("Frames suppressed by the ingress TxID dedup gate (sibling proxy or listener already claimed the TxID)")); err != nil {
+		return nil, err
+	}
+	if r.txidClaimLocalHit, err = meter.Int64Counter("bsp_txid_claim_local_hit_total",
+		metric.WithDescription("Tier-1 local-LRU short-circuits during TxID claim (no Redis call)")); err != nil {
+		return nil, err
+	}
+	if r.txidClaimWon, err = meter.Int64Counter("bsp_txid_claim_won_total",
+		metric.WithDescription("Tier-2 Redis SETNX wins during TxID claim (frame proceeds to multicast)")); err != nil {
+		return nil, err
+	}
+	if r.txidClaimLost, err = meter.Int64Counter("bsp_txid_claim_lost_total",
+		metric.WithDescription("Tier-2 Redis SETNX losses during TxID claim (sibling already claimed; frame dropped)")); err != nil {
+		return nil, err
+	}
+	if r.txidClaimError, err = meter.Int64Counter("bsp_txid_claim_errors_total",
+		metric.WithDescription("Redis errors during TxID claim (fail-open: frame was forwarded)")); err != nil {
+		return nil, err
+	}
+
 	return r, nil
 }
 
@@ -366,6 +394,47 @@ func (r *Recorder) FrameFragmented(workerID int, k int) {
 func (r *Recorder) ControlFrameForwarded(ctrlGroup string) {
 	r.ctrlFramesForwarded.Add(context.Background(), 1, metric.WithAttributes(
 		attribute.String("ctrl_group", ctrlGroup),
+	))
+}
+
+// IngressDeduped records a frame suppressed by the ingress TxID dedup gate.
+// frameType is one of "brc124", "brc131", "brc132", "brc134" — matching the
+// frame-version namespace used by other metrics. iface may be empty when the
+// dropping worker has no resolved interface yet.
+func (r *Recorder) IngressDeduped(iface string, workerID int, frameType string) {
+	r.ingressDeduped.Add(context.Background(), 1, metric.WithAttributes(
+		attribute.Int("worker", workerID),
+		ifaceAttr(iface),
+		attribute.String("frame_type", frameType),
+	))
+}
+
+// TxidClaimLocalHit records a tier-1 local-LRU short-circuit during TxID
+// dedup; the frame was suppressed without a Redis call.
+func (r *Recorder) TxidClaimLocalHit(prefix string) {
+	r.txidClaimLocalHit.Add(context.Background(), 1, metric.WithAttributes(
+		attribute.String("prefix", prefix),
+	))
+}
+
+// TxidClaimWon records a tier-2 SETNX win during TxID dedup (frame proceeds).
+func (r *Recorder) TxidClaimWon(prefix string) {
+	r.txidClaimWon.Add(context.Background(), 1, metric.WithAttributes(
+		attribute.String("prefix", prefix),
+	))
+}
+
+// TxidClaimLost records a tier-2 SETNX loss during TxID dedup (frame dropped).
+func (r *Recorder) TxidClaimLost(prefix string) {
+	r.txidClaimLost.Add(context.Background(), 1, metric.WithAttributes(
+		attribute.String("prefix", prefix),
+	))
+}
+
+// TxidClaimError records a Redis error during TxID dedup (fail-open).
+func (r *Recorder) TxidClaimError(prefix string) {
+	r.txidClaimError.Add(context.Background(), 1, metric.WithAttributes(
+		attribute.String("prefix", prefix),
 	))
 }
 

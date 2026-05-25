@@ -59,11 +59,27 @@ import (
 	"time"
 
 	"github.com/lightwebinc/bitcoin-shard-common/shard"
+	"github.com/lightwebinc/bitcoin-shard-common/txidset"
 	"github.com/lightwebinc/bitcoin-shard-proxy/config"
 	"github.com/lightwebinc/bitcoin-shard-proxy/forwarder"
 	"github.com/lightwebinc/bitcoin-shard-proxy/metrics"
 	"github.com/lightwebinc/bitcoin-shard-proxy/worker"
 )
+
+// txidsetRecorder adapts *metrics.Recorder to the txidset.Recorder interface.
+// The proxy only ever uses Claim (never Mark) so Mark-related callbacks are
+// silent no-ops on the metric side; they remain on the interface for forward
+// compatibility with shared Store usage patterns.
+type txidsetRecorder struct{ rec *metrics.Recorder }
+
+func (r txidsetRecorder) ClaimLocalHit(p string) { r.rec.TxidClaimLocalHit(p) }
+func (r txidsetRecorder) ClaimWon(p string)      { r.rec.TxidClaimWon(p) }
+func (r txidsetRecorder) ClaimLost(p string)     { r.rec.TxidClaimLost(p) }
+func (r txidsetRecorder) ClaimError(p string)    { r.rec.TxidClaimError(p) }
+func (r txidsetRecorder) MarkSet(string)         {}
+func (r txidsetRecorder) MarkExisted(string)     {}
+func (r txidsetRecorder) MarkError(string)       {}
+func (r txidsetRecorder) MarkDropped(string)     {}
 
 func main() {
 	// Load and validate configuration from flags / environment variables.
@@ -124,6 +140,30 @@ func main() {
 	if cfg.FragMTU > 0 {
 		fwd.SetFragMTU(cfg.FragMTU)
 		slog.Info("BRC-130 fragmentation enabled", "frag_mtu", cfg.FragMTU)
+	}
+
+	// Optional ingress TxID dedup. Two-tier (local LRU → Redis SETNX).
+	// LocalCap=0 disables the feature entirely.
+	var txStore *txidset.Store
+	if cfg.TxidDedupLocalCap > 0 {
+		txStore, err = txidset.New(txidset.Config{
+			RedisAddr:     cfg.TxidDedupRedisAddr,
+			TTL:           cfg.TxidDedupTTL,
+			LocalCapacity: cfg.TxidDedupLocalCap,
+			Recorder:      txidsetRecorder{rec: rec},
+		})
+		if err != nil {
+			slog.Error("txid dedup init failed", "err", err)
+			os.Exit(1)
+		}
+		defer func() { _ = txStore.Close() }()
+		fwd.SetTxidDedup(txStore, cfg.TxidDedupPrefix)
+		slog.Info("ingress TxID dedup enabled",
+			"redis_addr", cfg.TxidDedupRedisAddr,
+			"prefix", cfg.TxidDedupPrefix,
+			"ttl", cfg.TxidDedupTTL,
+			"local_cap", cfg.TxidDedupLocalCap,
+		)
 	}
 
 	// done is closed to signal all workers to stop their receive loops.

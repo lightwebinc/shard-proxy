@@ -22,6 +22,10 @@
 //	-otlp-endpoint        OTLP_ENDPOINT         ""        OTLP gRPC endpoint (empty = disabled)
 //	-otlp-interval        OTLP_INTERVAL         30s       OTLP push interval
 //	-frag-mtu             FRAG_MTU              0         Path MTU for BRC-130 fragmentation (0 = disabled)
+//	-txid-dedup-redis-addr TXID_DEDUP_REDIS_ADDR ""       Redis address for ingress TxID dedup (empty = local-only)
+//	-txid-dedup-prefix    TXID_DEDUP_PREFIX     bsp:tx:   Redis key prefix for ingress dedup entries
+//	-txid-dedup-ttl       TXID_DEDUP_TTL        10m       TTL for ingress dedup Redis entries (1m..30m typical)
+//	-txid-dedup-local-cap TXID_DEDUP_LOCAL_CAP  1048576   Tier-1 local TxID set capacity (0 = disable proxy ingress dedup)
 package config
 
 import (
@@ -84,6 +88,21 @@ type Config struct {
 	InstanceID   string        // OTel service.instance.id for federation; defaults to hostname
 	OTLPEndpoint string        // gRPC OTLP endpoint (empty = disabled)
 	OTLPInterval time.Duration // OTLP push interval
+
+	// TxID ingress dedup (proxy-side)
+	//
+	// The proxy may consult a two-tier (local LRU → Redis SETNX) TxID claim
+	// store before stamping and multicasting a frame. The first proxy to
+	// claim a TxID in Redis multicasts it; siblings drop. Listeners may
+	// optionally mark the same Redis namespace on receive to inform the
+	// proxy when a TxID arrived via a path the proxy itself did not see.
+	//
+	// TxidDedupRedisAddr empty → tier-2 disabled; only the local LRU is used.
+	// TxidDedupLocalCap=0 → dedup feature disabled entirely.
+	TxidDedupRedisAddr string
+	TxidDedupPrefix    string
+	TxidDedupTTL       time.Duration
+	TxidDedupLocalCap  int
 }
 
 // Load parses flags and environment variables, validates all values, and
@@ -117,6 +136,15 @@ func Load() (*Config, error) {
 		"pre-drain delay before closing ingress sockets; /readyz returns 503 during this window (0 = disabled)")
 	flag.IntVar(&c.FragMTU, "frag-mtu", envInt("FRAG_MTU", 0),
 		"path MTU for BRC-130 fragmentation (0 = disabled; typical: 1500 for Ethernet, 9000 for jumbo)")
+
+	flag.StringVar(&c.TxidDedupRedisAddr, "txid-dedup-redis-addr", envStr("TXID_DEDUP_REDIS_ADDR", ""),
+		"Redis address for ingress TxID dedup (empty = local-only tier-1 LRU)")
+	flag.StringVar(&c.TxidDedupPrefix, "txid-dedup-prefix", envStr("TXID_DEDUP_PREFIX", "bsp:tx:"),
+		"Redis key prefix for ingress TxID dedup entries (must match listener's -ingress-set-prefix at the same site)")
+	flag.DurationVar(&c.TxidDedupTTL, "txid-dedup-ttl", envDuration("TXID_DEDUP_TTL", 10*time.Minute),
+		"TTL for ingress TxID dedup Redis entries; 1m–30m typical")
+	flag.IntVar(&c.TxidDedupLocalCap, "txid-dedup-local-cap", envInt("TXID_DEDUP_LOCAL_CAP", 1<<20),
+		"tier-1 local TxID set capacity (0 = disable proxy ingress dedup entirely)")
 
 	flag.StringVar(&c.MetricsAddr, "metrics-addr", envStr("METRICS_ADDR", ":9100"),
 		"HTTP bind address for /metrics, /healthz, /readyz")
@@ -174,6 +202,16 @@ func Load() (*Config, error) {
 	}
 	if len(c.EgressIfaces) == 0 {
 		return nil, fmt.Errorf("at least one egress interface must be specified via -iface")
+	}
+
+	// Validate TxID dedup parameters when the feature is enabled.
+	if c.TxidDedupLocalCap > 0 {
+		if c.TxidDedupTTL <= 0 {
+			return nil, fmt.Errorf("txid-dedup-ttl must be > 0 when dedup is enabled (got %s)", c.TxidDedupTTL)
+		}
+		if c.TxidDedupPrefix == "" {
+			return nil, fmt.Errorf("txid-dedup-prefix must not be empty when dedup is enabled")
+		}
 	}
 
 	return c, nil
