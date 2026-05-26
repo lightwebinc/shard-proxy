@@ -68,8 +68,9 @@ and call `Forwarder.ProcessBlock`; `handleConn` does the same on the TCP path.
 
 `ProcessAnchor`:
 - Validates via `frame.DecodeAnchor`.
-- Stamps `HashKey` as `XXH64(senderIPv6 ∥ 0xFFFE ∥ zeros)` and `SeqNum` as a monotonic
-  per-flow counter when both are zero in the incoming frame.
+- Stamps `HashKey` as `XXH64(senderIPv6 ∥ 0xFFF9 ∥ zeros)` and `SeqNum` as a monotonic
+  per-flow counter when both are zero in the incoming frame. The virtual index `0xFFF9`
+  gives anchor frames an independent flow identity from BRC-131 block frames.
 - Forwards the raw bytes verbatim to `CtrlGroupControl` (`FF0X::B:FFFE`) on all egress interfaces.
 - No BRC-130 fragmentation (anchor transactions are expected to be small).
 
@@ -234,8 +235,8 @@ Offset  Size  Align  Field          Value / notes
      6     1   —     Frame version  0x06 (BRC-134)
      7     1   —     Reserved       0x00
      8    32   8B    TxID           Anchor transaction ID (SHA256d, internal byte order)
-    40     8   8B    HashKey        Stamped by proxy; XXH64(senderIPv6 ∥ 0xFFFE ∥ zeros)
-    48     8   8B    SeqNum         Monotonic per (sender, 0xFFFE, zeros) flow; 0 = unset
+    40     8   8B    HashKey        Stamped by proxy; XXH64(senderIPv6 ∥ 0xFFF9 ∥ zeros)
+    48     8   8B    SeqNum         Monotonic per (sender, 0xFFF9, zeros) flow; 0 = unset
     56    32   8B    LayoutPad32    All zeros
     88     4   —     PayloadLen     uint32 BE
     92     *   —     Payload        Raw serialised anchor transaction
@@ -284,7 +285,8 @@ bitcoin-shard-proxy/
   config/            runtime configuration (flags + env vars + validation)
   forwarder/         decode → zero-copy verbatim forward pipeline;
                      Process (BRC-12/BRC-124/BRC-128), ProcessBlock (BRC-131),
-                     ProcessSubtreeData (BRC-132), BRC-130 fragmentation
+                     ProcessSubtreeData (BRC-132), ProcessAnchor (BRC-134),
+                     BRC-130 fragmentation
   worker/            per-CPU SO_REUSEPORT UDP ingress loop with frame-version dispatch
                      for BRC-131/BRC-132/BRC-134 (worker.go);
                      TCP ingress listener with BRC-127 routing (tcp.go)
@@ -296,7 +298,7 @@ Protocol primitives are provided by
 
 ```
 bitcoin-shard-common/
-  frame/             BRC-12/BRC-124/BRC-128/BRC-131/BRC-132 wire format: Decode, Encode, constants
+  frame/             BRC-12/BRC-124/BRC-128/BRC-131/BRC-132/BRC-134/BRC-135 wire format: Decode, Encode, constants
   shard/             txid → group index → IPv6 multicast address derivation;
                      control group constants and ControlGroupAddr
   seqhash/           XXH64 per-flow HashKey computation (senderIPv6 ∥ groupIdx ∥ subtreeID)
