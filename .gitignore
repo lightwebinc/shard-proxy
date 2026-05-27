@@ -32,11 +32,11 @@ go.work.sum
 # .vscode/
 
 # Artifacts
-/bitcoin-shard-proxy
+/shard-proxy
 /send-test-frames
 /recv-test-frames
 /perf-test
 /benchmark
 
-# Generated perf-test reports (stored in bitcoin-multicast-test/testing/)
+# Generated perf-test reports (stored in multicast-test/testing/)
 /report-*.md
