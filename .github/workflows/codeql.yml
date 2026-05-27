@@ -22,20 +22,20 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          path: bitcoin-shard-proxy
+          path: shard-proxy
 
       - uses: actions/checkout@v6
         with:
-          repository: lightwebinc/bitcoin-shard-common
-          path: bitcoin-shard-common
+          repository: lightwebinc/shard-common
+          path: shard-common
 
       - uses: actions/setup-go@v6
         with:
-          go-version-file: bitcoin-shard-proxy/go.mod
+          go-version-file: shard-proxy/go.mod
 
-      - name: Use local bitcoin-shard-common
-        working-directory: bitcoin-shard-proxy
-        run: go mod edit -replace github.com/lightwebinc/bitcoin-shard-common=../bitcoin-shard-common
+      - name: Use local shard-common
+        working-directory: shard-proxy
+        run: go mod edit -replace github.com/lightwebinc/shard-common=../shard-common
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4

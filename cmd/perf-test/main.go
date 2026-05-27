@@ -34,7 +34,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/lightwebinc/bitcoin-shard-common/frame"
+	"github.com/lightwebinc/shard-common/frame"
 )
 
 // ---------------------------------------------------------------------------

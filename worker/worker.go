@@ -27,9 +27,9 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/lightwebinc/bitcoin-shard-common/frame"
-	"github.com/lightwebinc/bitcoin-shard-proxy/forwarder"
-	"github.com/lightwebinc/bitcoin-shard-proxy/metrics"
+	"github.com/lightwebinc/shard-common/frame"
+	"github.com/lightwebinc/shard-proxy/forwarder"
+	"github.com/lightwebinc/shard-proxy/metrics"
 )
 
 const (

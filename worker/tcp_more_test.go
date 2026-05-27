@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lightwebinc/bitcoin-shard-common/frame"
+	"github.com/lightwebinc/shard-common/frame"
 )
 
 // TestHandleConn_UnsupportedFrameVersion exercises the default switch arm

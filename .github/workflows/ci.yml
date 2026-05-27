@@ -16,20 +16,20 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          path: bitcoin-shard-proxy
+          path: shard-proxy
 
       - uses: actions/checkout@v6
         with:
-          repository: lightwebinc/bitcoin-shard-common
-          path: bitcoin-shard-common
+          repository: lightwebinc/shard-common
+          path: shard-common
 
       - uses: actions/setup-go@v6
         with:
-          go-version-file: bitcoin-shard-proxy/go.mod
+          go-version-file: shard-proxy/go.mod
           cache: false
 
       - name: Run Dagger pipeline
-        working-directory: bitcoin-shard-proxy
+        working-directory: shard-proxy
         env:
           GOWORK: "off"
         run: make ci
@@ -40,20 +40,20 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          path: bitcoin-shard-proxy
+          path: shard-proxy
 
       - uses: actions/checkout@v6
         with:
-          repository: lightwebinc/bitcoin-shard-common
-          path: bitcoin-shard-common
+          repository: lightwebinc/shard-common
+          path: shard-common
 
       - uses: actions/setup-go@v6
         with:
-          go-version-file: bitcoin-shard-proxy/go.mod
+          go-version-file: shard-proxy/go.mod
 
-      - name: Use local bitcoin-shard-common
-        working-directory: bitcoin-shard-proxy
-        run: go mod edit -replace github.com/lightwebinc/bitcoin-shard-common=../bitcoin-shard-common
+      - name: Use local shard-common
+        working-directory: shard-proxy
+        run: go mod edit -replace github.com/lightwebinc/shard-common=../shard-common
 
       - name: Install curl
         run: sudo apt-get install -y --no-install-recommends curl
@@ -64,5 +64,5 @@ jobs:
           sudo ip -6 route add ff00::/8 dev lo table local 2>/dev/null || true
 
       - name: E2E test
-        working-directory: bitcoin-shard-proxy
+        working-directory: shard-proxy
         run: make test-e2e

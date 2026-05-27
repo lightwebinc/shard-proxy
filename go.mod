@@ -1,9 +1,9 @@
-module github.com/lightwebinc/bitcoin-shard-proxy
+module github.com/lightwebinc/shard-proxy
 
 go 1.25.10
 
 require (
-	github.com/lightwebinc/bitcoin-shard-common v0.8.2
+	github.com/lightwebinc/shard-common v0.10.0
 	github.com/prometheus/client_golang v1.23.2
 	go.opentelemetry.io/otel v1.43.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.43.0
@@ -27,9 +27,11 @@ require (
 	github.com/prometheus/common v0.67.5 // indirect
 	github.com/prometheus/otlptranslator v1.0.0 // indirect
 	github.com/prometheus/procfs v0.20.1 // indirect
+	github.com/redis/go-redis/v9 v9.19.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel/trace v1.43.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.10.0 // indirect
+	go.uber.org/atomic v1.11.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	golang.org/x/net v0.52.0 // indirect
 	golang.org/x/text v0.35.0 // indirect

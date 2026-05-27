@@ -26,8 +26,8 @@ import (
 	"net"
 	"time"
 
-	"github.com/lightwebinc/bitcoin-shard-common/frame"
-	"github.com/lightwebinc/bitcoin-shard-common/shard"
+	"github.com/lightwebinc/shard-common/frame"
+	"github.com/lightwebinc/shard-common/shard"
 )
 
 const ipv6UDPOverhead = 40 + 8 + 104 // IPv6 + UDP + BRC-130 header

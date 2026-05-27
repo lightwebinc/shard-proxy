@@ -4,7 +4,7 @@ import (
 	"net"
 	"testing"
 
-	"github.com/lightwebinc/bitcoin-shard-common/shard"
+	"github.com/lightwebinc/shard-common/shard"
 )
 
 func TestForwardControl_PerTargetWrite(t *testing.T) {

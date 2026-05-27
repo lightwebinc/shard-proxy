@@ -20,7 +20,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/lightwebinc/bitcoin-shard-common/frame"
+	"github.com/lightwebinc/shard-common/frame"
 )
 
 func main() {

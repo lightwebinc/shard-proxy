@@ -37,7 +37,7 @@ import (
 
 const (
 	repoName     = "bitcoin-shard-proxy"
-	commonModule = "github.com/lightwebinc/bitcoin-shard-common"
+	commonModule = "github.com/lightwebinc/shard-common"
 	goImage      = "golang:1.25-alpine"
 	lintImage    = "golangci/golangci-lint:v2.5.0-alpine"
 )

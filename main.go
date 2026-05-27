@@ -58,12 +58,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/lightwebinc/bitcoin-shard-common/shard"
-	"github.com/lightwebinc/bitcoin-shard-common/txidset"
-	"github.com/lightwebinc/bitcoin-shard-proxy/config"
-	"github.com/lightwebinc/bitcoin-shard-proxy/forwarder"
-	"github.com/lightwebinc/bitcoin-shard-proxy/metrics"
-	"github.com/lightwebinc/bitcoin-shard-proxy/worker"
+	"github.com/lightwebinc/shard-common/shard"
+	"github.com/lightwebinc/shard-common/txidset"
+	"github.com/lightwebinc/shard-proxy/config"
+	"github.com/lightwebinc/shard-proxy/forwarder"
+	"github.com/lightwebinc/shard-proxy/metrics"
+	"github.com/lightwebinc/shard-proxy/worker"
 )
 
 // txidsetRecorder adapts *metrics.Recorder to the txidset.Recorder interface.

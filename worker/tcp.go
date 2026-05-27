@@ -26,10 +26,10 @@ import (
 	"net"
 	"sync"
 
-	"github.com/lightwebinc/bitcoin-shard-common/frame"
-	"github.com/lightwebinc/bitcoin-shard-common/shard"
-	"github.com/lightwebinc/bitcoin-shard-proxy/forwarder"
-	"github.com/lightwebinc/bitcoin-shard-proxy/metrics"
+	"github.com/lightwebinc/shard-common/frame"
+	"github.com/lightwebinc/shard-common/shard"
+	"github.com/lightwebinc/shard-proxy/forwarder"
+	"github.com/lightwebinc/shard-proxy/metrics"
 )
 
 const tcpBufSize = 64 * 1024 // 64 KiB read buffer per TCP connection

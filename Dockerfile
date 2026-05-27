@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 #
-# Canonical multi-stage Dockerfile for bitcoin-shard-proxy.
+# Canonical multi-stage Dockerfile for shard-proxy.
 # Final image: distroless/static:nonroot, no in-image ENV defaults
 # (configure via Helm values.yaml or container env at runtime).
 
@@ -22,10 +22,10 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -buildvcs=false \
-      -ldflags "-s -w -X github.com/lightwebinc/bitcoin-shard-proxy/metrics.Version=${VERSION}" \
-      -o /out/bitcoin-shard-proxy .
+      -ldflags "-s -w -X github.com/lightwebinc/shard-proxy/metrics.Version=${VERSION}" \
+      -o /out/shard-proxy .
 
 FROM gcr.io/distroless/static:nonroot
 USER nonroot:nonroot
-COPY --from=builder /out/bitcoin-shard-proxy /usr/local/bin/bitcoin-shard-proxy
-ENTRYPOINT ["/usr/local/bin/bitcoin-shard-proxy"]
+COPY --from=builder /out/shard-proxy /usr/local/bin/shard-proxy
+ENTRYPOINT ["/usr/local/bin/shard-proxy"]

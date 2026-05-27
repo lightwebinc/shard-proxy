@@ -42,10 +42,10 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/lightwebinc/bitcoin-shard-common/frame"
-	"github.com/lightwebinc/bitcoin-shard-common/seqhash"
-	"github.com/lightwebinc/bitcoin-shard-common/shard"
-	"github.com/lightwebinc/bitcoin-shard-proxy/metrics"
+	"github.com/lightwebinc/shard-common/frame"
+	"github.com/lightwebinc/shard-common/seqhash"
+	"github.com/lightwebinc/shard-common/shard"
+	"github.com/lightwebinc/shard-proxy/metrics"
 )
 
 // chainKey identifies a unique (sender IPv6, multicast group, subtree) chain.

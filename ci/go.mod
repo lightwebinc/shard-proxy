@@ -1,4 +1,4 @@
-module github.com/lightwebinc/bitcoin-shard-proxy/ci
+module github.com/lightwebinc/shard-proxy/ci
 
 go 1.25.0
 
