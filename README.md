@@ -1,10 +1,10 @@
-# bitcoin-shard-proxy
+# shard-proxy
 
-[![CI](https://github.com/lightwebinc/bitcoin-shard-proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/lightwebinc/bitcoin-shard-proxy/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/lightwebinc/bitcoin-shard-proxy/actions/workflows/codeql.yml/badge.svg)](https://github.com/lightwebinc/bitcoin-shard-proxy/actions/workflows/codeql.yml)
-[![Release](https://img.shields.io/github/v/release/lightwebinc/bitcoin-shard-proxy)](https://github.com/lightwebinc/bitcoin-shard-proxy/releases)
-[![Go Reference](https://pkg.go.dev/badge/github.com/lightwebinc/bitcoin-shard-proxy.svg)](https://pkg.go.dev/github.com/lightwebinc/bitcoin-shard-proxy)
-[![Go Report Card](https://goreportcard.com/badge/github.com/lightwebinc/bitcoin-shard-proxy)](https://goreportcard.com/report/github.com/lightwebinc/bitcoin-shard-proxy)
+[![CI](https://github.com/lightwebinc/shard-proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/lightwebinc/shard-proxy/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/lightwebinc/shard-proxy/actions/workflows/codeql.yml/badge.svg)](https://github.com/lightwebinc/shard-proxy/actions/workflows/codeql.yml)
+[![Release](https://img.shields.io/github/v/release/lightwebinc/shard-proxy)](https://github.com/lightwebinc/shard-proxy/releases)
+[![Go Reference](https://pkg.go.dev/badge/github.com/lightwebinc/shard-proxy.svg)](https://pkg.go.dev/github.com/lightwebinc/shard-proxy)
+[![Go Report Card](https://goreportcard.com/badge/github.com/lightwebinc/shard-proxy)](https://goreportcard.com/report/github.com/lightwebinc/shard-proxy)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 A high-throughput proxy that receives Bitcoin SV (BSV Blockchain) transaction
@@ -18,7 +18,7 @@ BRC-127 SubtreeAnnounce datagrams to the control-plane multicast group.
 Inspiration: [Multicast within Multicast: Anycast](https://singulargrit.substack.com/p/multicast-within-multicast-anycast), [Multicast as the Only Viable Architecture](https://singulargrit.substack.com/p/multicast-as-the-only-viable-architecture)
 
 ```text
-sender  ──UDP/TCP──►  bitcoin-shard-proxy  ──UDP multicast──►  FF05::<shard>  (iface 0)
+sender  ──UDP/TCP──►  shard-proxy  ──UDP multicast──►  FF05::<shard>  (iface 0)
                       (forwarder pipeline) └─────────────────►  FF05::<shard>  (iface 1)
                                                                  (subset of subscribers)
 ```
@@ -30,7 +30,7 @@ sender  ──UDP/TCP──►  bitcoin-shard-proxy  ──UDP multicast──�
 
 ## Dependencies
 
-- [`github.com/lightwebinc/bitcoin-shard-common`](https://github.com/lightwebinc/bitcoin-shard-common) — `frame`, `shard`, `seqhash` packages
+- [`github.com/lightwebinc/shard-common`](https://github.com/lightwebinc/shard-common) — `frame`, `shard`, `seqhash` packages
 
 ## Requirements
 
@@ -43,7 +43,7 @@ sender  ──UDP/TCP──►  bitcoin-shard-proxy  ──UDP multicast──�
 ## Build
 
 ```bash
-make            # builds bitcoin-shard-proxy, send-test-frames, recv-test-frames
+make            # builds shard-proxy, send-test-frames, recv-test-frames
 make test       # runs unit tests
 make test-e2e   # end-to-end test (builds all binaries, runs test/run-e2e.sh)
 make clean      # removes built binaries
@@ -52,7 +52,7 @@ make clean      # removes built binaries
 ## Run
 
 ```bash
-./bitcoin-shard-proxy \
+./shard-proxy \
   -iface            eth0 \
   -shard-bits       16   \
   -scope            site \
@@ -63,7 +63,7 @@ make clean      # removes built binaries
 With TCP ingress enabled:
 
 ```bash
-./bitcoin-shard-proxy \
+./shard-proxy \
   -iface            eth0 \
   -udp-listen-port  9000 \
   -tcp-listen-port  9100
@@ -74,7 +74,7 @@ See [docs/configuration.md](docs/configuration.md) for all flags and environment
 ## Container image
 
 The Dockerfile produces a `gcr.io/distroless/static:nonroot` image with the
-single static binary at `/usr/local/bin/bitcoin-shard-proxy`. No in-image
+single static binary at `/usr/local/bin/shard-proxy`. No in-image
 `ENV` defaults are set — configure via Helm `values.yaml`, container
 environment variables, or CLI flags.
 
@@ -82,13 +82,13 @@ environment variables, or CLI flags.
 
 A Kubernetes Helm chart is published from a dedicated chart repository:
 
-- Repository: [`lightwebinc/bitcoin-shard-proxy-helm`](https://github.com/lightwebinc/bitcoin-shard-proxy-helm)
+- Repository: [`lightwebinc/shard-proxy-helm`](https://github.com/lightwebinc/shard-proxy-helm)
 - HTTPS:
   ```
-  helm repo add bsp https://lightwebinc.github.io/bitcoin-shard-proxy-helm
-  helm install proxy bsp/bitcoin-shard-proxy
+  helm repo add bsp https://lightwebinc.github.io/shard-proxy-helm
+  helm install proxy bsp/shard-proxy
   ```
-- OCI: `helm install proxy oci://ghcr.io/lightwebinc/charts/bitcoin-shard-proxy --version 0.1.0`
+- OCI: `helm install proxy oci://ghcr.io/lightwebinc/charts/shard-proxy --version 0.1.0`
 
 Every flag accepted by this binary is exposed under `.config` in the chart's `values.yaml`. See the chart README for the full reference and `values.schema.json` for validation rules.
 
