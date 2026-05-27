@@ -1,4 +1,4 @@
-// Command bitcoin-shard-proxy accepts BSV transaction datagrams on a UDP
+// Command shard-proxy accepts BSV transaction datagrams on a UDP
 // IPv6 socket, derives a multicast group address from the transaction ID's
 // top N bits, and retransmits each datagram verbatim to the derived group.
 //
@@ -9,7 +9,7 @@
 //
 // # Quick start
 //
-//	bitcoin-shard-proxy -iface eth0,eth1 -shard-bits 8 -scope site
+//	shard-proxy -iface eth0,eth1 -shard-bits 8 -scope site
 //
 // # Configuration
 //
@@ -120,7 +120,7 @@ func main() {
 	// Construct the shard engine. It is immutable and safe for concurrent use.
 	engine := shard.New(cfg.MCPrefix, cfg.MCGroupID, cfg.ShardBits)
 
-	slog.Info("bitcoin-shard-proxy starting",
+	slog.Info("shard-proxy starting",
 		"workers", cfg.NumWorkers,
 		"shard_bits", cfg.ShardBits,
 		"num_groups", engine.NumGroups(),

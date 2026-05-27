@@ -1,5 +1,5 @@
 // Package forwarder implements the decode → forward pipeline for
-// bitcoin-shard-proxy.
+// shard-proxy.
 //
 // # Hot path
 //
@@ -72,7 +72,7 @@ type Target struct {
 const ipv6UDPOverhead = 40 + 8 + 104
 
 // TxidDedup is the minimal interface a TxID claim store must satisfy. It is
-// satisfied by *txidset.Store from bitcoin-shard-common; the forwarder depends
+// satisfied by *txidset.Store from shard-common; the forwarder depends
 // only on this interface so that tests can inject lightweight fakes.
 //
 // Claim must report (true, nil) when the caller wins the claim (proceed),

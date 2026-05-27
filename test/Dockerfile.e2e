@@ -5,7 +5,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -o /bitcoin-shard-proxy . && \
+RUN CGO_ENABLED=0 go build -trimpath -o /shard-proxy . && \
     CGO_ENABLED=0 go build -trimpath -o /send-test-frames ./cmd/send-test-frames/ && \
     CGO_ENABLED=0 go build -trimpath -o /recv-test-frames ./cmd/recv-test-frames/
 
@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         iproute2 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /bitcoin-shard-proxy /usr/local/bin/bitcoin-shard-proxy
+COPY --from=builder /shard-proxy /usr/local/bin/shard-proxy
 COPY --from=builder /send-test-frames /usr/local/bin/send-test-frames
 COPY --from=builder /recv-test-frames /usr/local/bin/recv-test-frames
 

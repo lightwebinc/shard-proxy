@@ -1,4 +1,4 @@
-// Command ci is the Dagger-backed CI/CD pipeline for bitcoin-shard-proxy.
+// Command ci is the Dagger-backed CI/CD pipeline for shard-proxy.
 //
 // Usage:
 //
@@ -18,7 +18,7 @@
 // Flags:
 //
 //	-src     path to repo source (default ".")
-//	-common  path to bitcoin-shard-common sibling (default "../bitcoin-shard-common")
+//	-common  path to shard-common sibling (default "../shard-common")
 //	-version version ldflag value (default "dev")
 //	-address registry ref for `image` publish (e.g. ghcr.io/foo/bar:tag)
 //	-export  tarball path for `image` export
@@ -36,7 +36,7 @@ import (
 )
 
 const (
-	repoName     = "bitcoin-shard-proxy"
+	repoName     = "shard-proxy"
 	commonModule = "github.com/lightwebinc/shard-common"
 	goImage      = "golang:1.25-alpine"
 	lintImage    = "golangci/golangci-lint:v2.5.0-alpine"
@@ -50,7 +50,7 @@ var buildTargets = []string{"./..."}
 func main() {
 	var (
 		src     = flag.String("src", ".", "path to repo source")
-		common  = flag.String("common", "../bitcoin-shard-common", "path to bitcoin-shard-common sibling")
+		common  = flag.String("common", "../shard-common", "path to shard-common sibling")
 		version = flag.String("version", "dev", "version ldflag value")
 		address = flag.String("address", "", "registry ref for image publish")
 		export  = flag.String("export", "", "tarball path for image export")
@@ -140,7 +140,7 @@ func (p *pipeline) buildCache() *dagger.CacheVolume { return p.c.CacheVolume("go
 func (p *pipeline) lintCache() *dagger.CacheVolume  { return p.c.CacheVolume("golangci-" + repoName) }
 
 // goBase returns a configured golang container with the repo mounted at /src,
-// bitcoin-shard-common mounted at /common, the local replace directive
+// shard-common mounted at /common, the local replace directive
 // applied, and modules downloaded.
 func (p *pipeline) goBase() *dagger.Container {
 	return p.c.Container().From(goImage).
@@ -192,7 +192,7 @@ func (p *pipeline) vuln(ctx context.Context) error {
 
 // tidy verifies that `go mod tidy` produces no diff against the committed
 // go.mod (after dropping the local replace directive). go.sum is intentionally
-// not diffed: a local-path replace for bitcoin-shard-common legitimately pulls
+// not diffed: a local-path replace for shard-common legitimately pulls
 // transitive-dep hashes into go.sum that are not in the committed file.
 func (p *pipeline) tidy(ctx context.Context) error {
 	_, err := p.c.Container().From(goImage).

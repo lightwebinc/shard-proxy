@@ -1,5 +1,5 @@
 // Command perf-test is a throughput performance measurement tool for
-// bitcoin-shard-proxy. It sends BRC-124 frames at a configurable PPS rate,
+// shard-proxy. It sends BRC-124 frames at a configurable PPS rate,
 // collects proxy Prometheus metrics, interface statistics, and per-group
 // per-receiver delivery data, then produces a markdown report.
 //

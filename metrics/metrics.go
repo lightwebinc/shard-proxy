@@ -52,7 +52,7 @@ import (
 )
 
 // ServiceName is the OTel service.name resource attribute value.
-const ServiceName = "bitcoin-shard-proxy"
+const ServiceName = "shard-proxy"
 
 // Version is set at build time via -ldflags "-X metrics.Version=<ver>".
 // Defaults to "dev" when not injected.

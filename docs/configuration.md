@@ -57,7 +57,7 @@ TCP ingress is disabled by default. Enable it with:
 Both transports can run at the same time:
 
 ```
-bitcoin-shard-proxy \
+shard-proxy \
   -iface eth0 \
   -udp-listen-port 9000 \
   -tcp-listen-port 9100
@@ -98,7 +98,7 @@ any modification.
 For **BRC-134 anchor frames** (`FrameVerV6`), the proxy forwards to `CtrlGroupControl`
 (`FF0X::B:FFFE`). Anchor frames use a virtual `groupIdx` of `0xFFF9` for HashKey derivation
 so anchors are accounted as an independent flow (label `brc134`) distinct from BRC-131 block
-control. See [bitcoin-multicast/docs/brc-134-anchor-transactions.md](../../../bitcoin-multicast/docs/brc-134-anchor-transactions.md).
+control. See [bsv-multicast/docs/brc-134-anchor-transactions.md](../../../bsv-multicast/docs/brc-134-anchor-transactions.md).
 
 ---
 
@@ -136,7 +136,7 @@ For production with a load balancer or BGP, set `-drain-timeout` to at least the
 
 ```bash
 # LB health-check every 5 s — allow two missed checks before closing
-bitcoin-shard-proxy -iface eth0 -drain-timeout 15s
+shard-proxy -iface eth0 -drain-timeout 15s
 ```
 
 > **`TimeoutStopSec` note:** systemd will send `SIGKILL` after `TimeoutStopSec` if the process has not exited. Ensure `TimeoutStopSec > drain-timeout + 15s` (OTLP flush + worker drain buffer). The default service unit sets `TimeoutStopSec=30`.
@@ -148,13 +148,13 @@ bitcoin-shard-proxy -iface eth0 -drain-timeout 15s
 ### Minimal (single NIC, defaults)
 
 ```bash
-bitcoin-shard-proxy -iface eth0
+shard-proxy -iface eth0
 ```
 
 ### Multi-NIC, custom shard bits, OTLP
 
 ```bash
-bitcoin-shard-proxy \
+shard-proxy \
   -iface eth0,eth1 \
   -shard-bits 8 \
   -udp-listen-port 9000 \
@@ -165,7 +165,7 @@ bitcoin-shard-proxy \
 ### With TCP ingress
 
 ```bash
-bitcoin-shard-proxy \
+shard-proxy \
   -iface eth0 \
   -udp-listen-port 9000 \
   -tcp-listen-port 9100
@@ -174,7 +174,7 @@ bitcoin-shard-proxy \
 ### With graceful drain (behind a load balancer)
 
 ```bash
-bitcoin-shard-proxy \
+shard-proxy \
   -iface eth0 \
   -udp-listen-port 9000 \
   -drain-timeout 15s
@@ -189,7 +189,7 @@ generated multicast address. The default `0x000B` produces addresses of
 the form `FF0X::B:<shard_index>` (IANA Bitcoin).
 
 ```bash
-./bitcoin-shard-proxy \
+./shard-proxy \
   -mc-group-id 0x000B \
   -scope site \
   -shard-bits 8
@@ -205,7 +205,7 @@ Every forwarded datagram is written to all listed interfaces in order,
 with no copying and no extra goroutines on the hot path:
 
 ```bash
-./bitcoin-shard-proxy \
+./shard-proxy \
   -iface       eth0,eth1 \
   -shard-bits  8         \
   -scope       site      \
@@ -277,4 +277,4 @@ frame. Legacy BRC-12 (V1) frames bypass the gate.
 
 Every flag documented in this file is exposed under `.config` in the corresponding Helm chart's `values.yaml`. See the chart repository for installation snippets and the `values.schema.json` for validation rules.
 
-Chart: [`lightwebinc/bitcoin-shard-proxy-helm`](https://github.com/lightwebinc/bitcoin-shard-proxy-helm)
+Chart: [`lightwebinc/shard-proxy-helm`](https://github.com/lightwebinc/shard-proxy-helm)

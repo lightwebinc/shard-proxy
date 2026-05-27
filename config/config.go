@@ -1,5 +1,5 @@
 // Package config loads and validates runtime configuration for
-// bitcoin-shard-proxy. Parameters are accepted from CLI flags first;
+// shard-proxy. Parameters are accepted from CLI flags first;
 // environment variables serve as fallbacks; hard-coded defaults apply when
 // neither is present.
 //

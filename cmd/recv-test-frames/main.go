@@ -1,6 +1,6 @@
 // Command recv-test-frames joins one or more IPv6 multicast groups and prints
 // every BSV-over-UDP frame it receives. Use alongside send-test-frames to
-// verify that bitcoin-shard-proxy is forwarding to the correct groups.
+// verify that shard-proxy is forwarding to the correct groups.
 //
 // Usage:
 //

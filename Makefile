@@ -1,4 +1,4 @@
-BINARY := bitcoin-shard-proxy
+BINARY := shard-proxy
 SEND   := send-test-frames
 RECV   := recv-test-frames
 PERF   := perf-test
@@ -6,7 +6,7 @@ PERF   := perf-test
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 TAG     ?= $(VERSION)
 IMAGE   ?= ghcr.io/lightwebinc/$(BINARY)
-COMMON  ?= ../bitcoin-shard-common
+COMMON  ?= ../shard-common
 
 # Dagger pipeline lives in its own module under ci/. GOWORK=off avoids
 # pulling the parent go.work into the ci/ build.

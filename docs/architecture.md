@@ -2,7 +2,7 @@
 
 ## Overview
 
-bitcoin-shard-proxy receives BSV transaction frames (BRC-12, BRC-124, BRC-128, BRC-131,
+shard-proxy receives BSV transaction frames (BRC-12, BRC-124, BRC-128, BRC-131,
 BRC-132, or BRC-134) over UDP (and optionally TCP), derives a deterministic multicast group
 address from each transaction's txid (or routes to a fixed control-plane group for
 BRC-131/BRC-132/BRC-134), then retransmits the original bytes verbatim to all configured
@@ -11,10 +11,10 @@ egress interfaces.
 Foundational concepts (shard hierarchy, anycast ingress, frame versions) live in
 [multicast-skills/architecture.md](../../multicast-skills/architecture.md) and
 [multicast-skills/protocol.md](../../multicast-skills/protocol.md); BRC wire formats in
-[bitcoin-multicast/docs/](../../bitcoin-multicast/docs/).
+[bsv-multicast/docs/](../../bsv-multicast/docs/).
 
 ```text
-sender  ──UDP/TCP──►  bitcoin-shard-proxy  ──UDP multicast──►  FF05::B:<shard>  (data plane, configurable scope)
+sender  ──UDP/TCP──►  shard-proxy  ──UDP multicast──►  FF05::B:<shard>  (data plane, configurable scope)
                       (forwarder pipeline) ├─────────────────►  FF0E::B:FFFE     (CtrlGroupControl, BRC-131/134, always global)
                                            ├─────────────────►  FF05::B:FFFB     (CtrlGroupSubtreeAnnounce, BRC-132)
                                            └─────────────────►  FF05::B:FFFC     (CtrlGroupSubtreeGroupAnnounce, BRC-127)
@@ -37,7 +37,7 @@ Subscribers join additional groups; existing subscriptions remain valid.
 
 BRC-131 and BRC-132 frames are routed to fixed control-plane multicast groups rather than
 shard-derived data-plane groups. The reserved indices (top of the 16-bit space, above
-`shard-bits` maximum of 15) are defined in `bitcoin-shard-common/shard/control.go`:
+`shard-bits` maximum of 15) are defined in `shard-common/shard/control.go`:
 
 | Constant | Index | Canonical Address (group-id `0x000B`) | Purpose |
 |---|---|---|---|
@@ -280,7 +280,7 @@ Shutdown proceeds in two phases when `SIGINT` or `SIGTERM` is received:
 ## Package Structure
 
 ```
-bitcoin-shard-proxy/
+shard-proxy/
   main.go            entry point; wires config → engine → forwarder → workers
   config/            runtime configuration (flags + env vars + validation)
   forwarder/         decode → zero-copy verbatim forward pipeline;
@@ -294,10 +294,10 @@ bitcoin-shard-proxy/
 ```
 
 Protocol primitives are provided by
-[`github.com/lightwebinc/bitcoin-shard-common`](https://github.com/lightwebinc/bitcoin-shard-common):
+[`github.com/lightwebinc/shard-common`](https://github.com/lightwebinc/shard-common):
 
 ```
-bitcoin-shard-common/
+shard-common/
   frame/             BRC-12/BRC-124/BRC-128/BRC-131/BRC-132/BRC-134/BRC-135 wire format: Decode, Encode, constants
   shard/             txid → group index → IPv6 multicast address derivation;
                      control group constants and ControlGroupAddr

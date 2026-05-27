@@ -35,7 +35,7 @@ done
 echo "=== E2E test: shard_bits=$SHARD_BITS iface=$LOOPBACK groups=$groups ==="
 
 # Start proxy
-bitcoin-shard-proxy \
+shard-proxy \
     -iface "$LOOPBACK" \
     -scope link \
     -shard-bits "$SHARD_BITS" \

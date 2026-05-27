@@ -1,5 +1,5 @@
 // Command send-test-frames crafts and sends well-formed BSV-over-UDP frames
-// to bitcoin-shard-proxy for local integration testing.
+// to shard-proxy for local integration testing.
 //
 // Usage:
 //

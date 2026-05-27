@@ -1,5 +1,5 @@
 // Package worker implements the per-CPU receive-and-retransmit loop for
-// bitcoin-shard-proxy.
+// shard-proxy.
 //
 // # Design
 //
