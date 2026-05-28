@@ -400,7 +400,14 @@ func (fw *Forwarder) ProcessBlock(targets []Target, raw []byte, src net.Addr, wo
 
 	if src != nil {
 		ip := addrToIPv6(src)
+		// BRC-131 block announces and BRC-133 coinbase txs share the
+		// CtrlGroupControl multicast destination but use distinct virtual
+		// HashKey ingredients so each carries its own independent SeqNum
+		// counter on the proxy.
 		ctrlIdx := uint32(shard.CtrlGroupControl)
+		if bf.MsgType == frame.BlockMsgCoinbase {
+			ctrlIdx = shard.CoinbaseFlowVirtualIdx
+		}
 		var zeroSub [32]byte
 
 		// BRC-130 fragmentation path for large block payloads.
@@ -470,16 +477,15 @@ func (fw *Forwarder) ProcessAnchor(targets []Target, raw []byte, src net.Addr, w
 
 	if src != nil {
 		ip := addrToIPv6(src)
-		// Anchor frames use a dedicated virtual group index (0xFFF9) for
-		// HashKey derivation so they get their own independent SeqNum counter
-		// and flow identity, distinct from BRC-131 block frames which share
-		// the same CtrlGroupControl multicast address.
-		const anchorGroupIdx = uint32(0xFFF9)
+		// Anchor frames use a dedicated virtual group index for HashKey
+		// derivation so they get their own independent SeqNum counter
+		// and flow identity, distinct from BRC-131/BRC-133 frames which
+		// share the same CtrlGroupControl multicast address.
 		var zeroSub [32]byte
 
 		// Stamp HashKey/SeqNum in-place; HashKey is stamped even when SeqNum
 		// is pre-set so chain RL and cache keys are deterministic.
-		stampInPlace(raw, ip, anchorGroupIdx, zeroSub, fw)
+		stampInPlace(raw, ip, shard.AnchorFlowVirtualIdx, zeroSub, fw)
 	}
 
 	dst := shard.ControlGroupAddr(fw.mcPrefix, fw.mcGroupID, shard.CtrlGroupControl)

@@ -474,6 +474,55 @@ func buildBlockBufForwarder(t *testing.T, contentIDByte byte, payload []byte) []
 	return buf
 }
 
+// buildCoinbaseBufForwarder constructs a minimal valid BRC-133 BlockMsgCoinbase
+// frame for use in forwarder tests.
+func buildCoinbaseBufForwarder(t *testing.T, contentIDByte byte, payload []byte) []byte {
+	t.Helper()
+	if payload == nil {
+		payload = []byte("cb")
+	}
+	buf := make([]byte, frame.HeaderSize+len(payload))
+	binary.BigEndian.PutUint32(buf[0:4], frame.MagicBSV)
+	binary.BigEndian.PutUint16(buf[4:6], frame.ProtoVer)
+	buf[6] = frame.FrameVerV4
+	buf[7] = frame.BlockMsgCoinbase
+	buf[8] = contentIDByte
+	binary.BigEndian.PutUint32(buf[88:92], uint32(len(payload)))
+	copy(buf[frame.HeaderSize:], payload)
+	return buf
+}
+
+// TestProcessBlock_CoinbaseDistinctFlowFromAnnounce verifies that BRC-131
+// block announces and BRC-133 coinbase frames from the same sender produce
+// distinct HashKeys and independent SeqNum counters, even though they
+// egress to the same CtrlGroupControl multicast address. Coinbase uses
+// the virtual ingredient CoinbaseFlowVirtualIdx (0xFFF8); BlockAnnounce
+// uses CtrlGroupControl (0xFFFE).
+func TestProcessBlock_CoinbaseDistinctFlowFromAnnounce(t *testing.T) {
+	fw := makeForwarder()
+	src := &net.UDPAddr{IP: net.ParseIP("::1"), Port: 1}
+
+	rawAnnounce := buildBlockBufForwarder(t, 0xAA, nil)
+	rawCoinbase := buildCoinbaseBufForwarder(t, 0xBB, nil)
+	fw.ProcessBlock(nil, rawAnnounce, src, 0)
+	fw.ProcessBlock(nil, rawCoinbase, src, 0)
+
+	hkAnnounce := binary.BigEndian.Uint64(rawAnnounce[40:48])
+	hkCoinbase := binary.BigEndian.Uint64(rawCoinbase[40:48])
+	if hkAnnounce == hkCoinbase {
+		t.Errorf("announce HashKey %x == coinbase HashKey %x; expected distinct flows", hkAnnounce, hkCoinbase)
+	}
+
+	seqAnnounce := binary.BigEndian.Uint64(rawAnnounce[48:56])
+	seqCoinbase := binary.BigEndian.Uint64(rawCoinbase[48:56])
+	if seqAnnounce != 1 {
+		t.Errorf("announce SeqNum = %d, want 1", seqAnnounce)
+	}
+	if seqCoinbase != 1 {
+		t.Errorf("coinbase SeqNum = %d, want 1 (independent counter)", seqCoinbase)
+	}
+}
+
 // ── isErrno ───────────────────────────────────────────────────────────────────
 
 func TestIsErrnoMatch(t *testing.T) {

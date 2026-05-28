@@ -30,3 +30,16 @@ Format, a published standard maintained by BSV Blockchain:
   https://github.com/bitcoin-sv/BRCs/blob/master/transactions/0012.md
 
 =========================================================================
+Third-Party Software
+
+This product includes third-party software, distributed under the terms
+of their respective licenses. Each dependency retains its own copyright;
+this notice does not modify those licenses.
+
+  github.com/lightwebinc/shard-common         Apache License 2.0
+  github.com/prometheus/client_golang         Apache License 2.0
+  go.opentelemetry.io/otel and exporters      Apache License 2.0
+  github.com/redis/go-redis/v9                BSD 2-Clause License
+  github.com/cespare/xxhash/v2                MIT License
+
+=========================================================================
