@@ -433,7 +433,7 @@ func TestProcessAnchor_DistinctFlowFromBlock(t *testing.T) {
 
 	// Anchor frames use a virtual groupIdx (0xFFF9) for HashKey derivation
 	// so they get their own independent flow identity and SeqNum counter,
-	// distinct from BRC-131 block frames (which use CtrlGroupControl 0xFFFE).
+	// distinct from BRC-131 block frames (which use GroupBlockBroadcast 0xFFFE).
 	rawAnchor := buildAnchorFrame(t, 0xAA, 0, nil)
 	rawBlock := buildBlockBufForwarder(t, 0xBB, nil)
 	fw.ProcessAnchor(nil, rawAnchor, src, 0)
@@ -495,9 +495,9 @@ func buildCoinbaseBufForwarder(t *testing.T, contentIDByte byte, payload []byte)
 // TestProcessBlock_CoinbaseDistinctFlowFromAnnounce verifies that BRC-131
 // block announces and BRC-133 coinbase frames from the same sender produce
 // distinct HashKeys and independent SeqNum counters, even though they
-// egress to the same CtrlGroupControl multicast address. Coinbase uses
-// the virtual ingredient CoinbaseFlowVirtualIdx (0xFFF8); BlockAnnounce
-// uses CtrlGroupControl (0xFFFE).
+// egress to the same GroupBlockBroadcast multicast address. Coinbase uses
+// the virtual ingredient GroupCoinbaseFlow (0xFFF8); BlockAnnounce
+// uses GroupBlockBroadcast (0xFFFE).
 func TestProcessBlock_CoinbaseDistinctFlowFromAnnounce(t *testing.T) {
 	fw := makeForwarder()
 	src := &net.UDPAddr{IP: net.ParseIP("::1"), Port: 1}

@@ -148,7 +148,7 @@ func (ti *TCPIngress) handleConn(conn net.Conn, targets []forwarder.Target) {
 			if ti.rec != nil {
 				ti.rec.TCPBytesReceived(frame.SubtreeAnnounceSize)
 			}
-			ti.fwd.ForwardControl(targets, ctrlBuf[:], shard.CtrlGroupSubtreeGroupAnnounce, ti.fwd.EgressPort())
+			ti.fwd.ForwardControl(targets, ctrlBuf[:], shard.GroupSubtreeGroupAnnounce, ti.fwd.EgressPort())
 			continue
 		case frame.FrameVerV1:
 			hdrSize = frame.HeaderSizeLegacy

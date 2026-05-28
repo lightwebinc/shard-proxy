@@ -15,9 +15,9 @@ Foundational concepts (shard hierarchy, anycast ingress, frame versions) live in
 
 ```text
 sender  ──UDP/TCP──►  shard-proxy  ──UDP multicast──►  FF05::B:<shard>  (data plane, configurable scope)
-                      (forwarder pipeline) ├─────────────────►  FF0E::B:FFFE     (CtrlGroupControl, BRC-131/134, always global)
-                                           ├─────────────────►  FF05::B:FFFB     (CtrlGroupSubtreeAnnounce, BRC-132)
-                                           └─────────────────►  FF05::B:FFFC     (CtrlGroupSubtreeGroupAnnounce, BRC-127)
+                      (forwarder pipeline) ├─────────────────►  FF0E::B:FFFE     (GroupBlockBroadcast, BRC-131/134, always global)
+                                           ├─────────────────►  FF05::B:FFFB     (GroupSubtreeAnnounce, BRC-132)
+                                           └─────────────────►  FF05::B:FFFC     (GroupSubtreeGroupAnnounce, BRC-127)
 ```
 
 ## Shard Address Derivation
@@ -41,13 +41,13 @@ shard-derived data-plane groups. The reserved indices (top of the 16-bit space, 
 
 | Constant | Index | Canonical Address (group-id `0x000B`) | Purpose |
 |---|---|---|---|
-| `CtrlGroupBlockHeader` | 0xFFFA | egress-scope `FF0X::<egress-gid>:FFFA` | Block header egress channel (BRC-135) |
-| `CtrlGroupSubtreeAnnounce` | 0xFFFB | FF05::B:FFFB (data-plane scope) | BRC-132 subtree data frames |
-| `CtrlGroupSubtreeGroupAnnounce` | 0xFFFC | FF05::B:FFFC (data-plane scope) | BRC-127 subtree group announcements |
-| `CtrlGroupBeacon` | 0xFFFD | FF05::B:FFFD (site) / FF0E::B:FFFD (global) | ADVERT beacon (BRC-126 discovery) |
-| `CtrlGroupControl` | 0xFFFE | **FF0E::B:FFFE (always global)** | BRC-131 block control + BRC-134 anchor frames |
+| `GroupBlockHeader` | 0xFFFA | egress-scope `FF0X::<egress-gid>:FFFA` | Block header egress channel (BRC-135) |
+| `GroupSubtreeAnnounce` | 0xFFFB | FF05::B:FFFB (data-plane scope) | BRC-132 subtree data frames |
+| `GroupSubtreeGroupAnnounce` | 0xFFFC | FF05::B:FFFC (data-plane scope) | BRC-127 subtree group announcements |
+| `GroupBeacon` | 0xFFFD | FF05::B:FFFD (site) / FF0E::B:FFFD (global) | ADVERT beacon (BRC-126 discovery) |
+| `GroupBlockBroadcast` | 0xFFFE | **FF0E::B:FFFE (always global)** | BRC-131 block control + BRC-134 anchor frames |
 
-Per BRC-129 §3, `CtrlGroupControl` uses **global scope (FF0E)** regardless of the data-plane scope, because block headers, coinbase, and anchor transactions must reach every subscriber across organisational boundaries.
+Per BRC-129 §3, `GroupBlockBroadcast` uses **global scope (FF0E)** regardless of the data-plane scope, because block headers, coinbase, and anchor transactions must reach every subscriber across organisational boundaries.
 
 The `-shard-bits` limit of 15 ensures user shard indices (`0x0000`–`0x7FFF`) never overlap
 with control groups (`0xFFFA`–`0xFFFE`).
@@ -61,7 +61,7 @@ and call `Forwarder.ProcessBlock`; `handleConn` does the same on the TCP path.
 - Validates via `frame.DecodeBlock`.
 - Stamps `HashKey` as `XXH64(senderIPv6 ∥ 0xFFFE ∥ zeros)` and `SeqNum` as a monotonic
   per-flow counter when both are zero in the incoming frame.
-- Forwards the raw bytes verbatim to `CtrlGroupControl` (`FF0X::B:FFFE`) on all egress interfaces.
+- Forwards the raw bytes verbatim to `GroupBlockBroadcast` (`FF0X::B:FFFE`) on all egress interfaces.
 - If the payload exceeds the BRC-130 fragment threshold, calls `fragmentBlock()` instead.
   Each fragment carries `OrigFrameVer=0x04` so listeners route the reassembled payload to
   their block processing path.
@@ -71,7 +71,7 @@ and call `Forwarder.ProcessBlock`; `handleConn` does the same on the TCP path.
 - Stamps `HashKey` as `XXH64(senderIPv6 ∥ 0xFFF9 ∥ zeros)` and `SeqNum` as a monotonic
   per-flow counter when both are zero in the incoming frame. The virtual index `0xFFF9`
   gives anchor frames an independent flow identity from BRC-131 block frames.
-- Forwards the raw bytes verbatim to `CtrlGroupControl` (`FF0X::B:FFFE`) on all egress interfaces.
+- Forwards the raw bytes verbatim to `GroupBlockBroadcast` (`FF0X::B:FFFE`) on all egress interfaces.
 - No BRC-130 fragmentation (anchor transactions are expected to be small).
 
 Two `MsgType` values are defined (byte 7 of the header):
@@ -98,7 +98,7 @@ subscriber regardless of which shard their TxID would otherwise hash to. UDP wor
 - Stamps `HashKey` as `XXH64(senderIPv6 ∥ 0xFFFB ∥ subtreeID)` and `SeqNum` as a monotonic
   per-flow counter. The flow key incorporates `subtreeID` so each distinct subtree is
   sequenced independently.
-- Forwards the raw bytes to `CtrlGroupSubtreeAnnounce` (`FF0X::B:FFFB`) on all egress interfaces.
+- Forwards the raw bytes to `GroupSubtreeAnnounce` (`FF0X::B:FFFB`) on all egress interfaces.
 - If the payload exceeds the BRC-130 fragment threshold, calls `fragmentSubtreeData()`.
   Each fragment carries `OrigFrameVer=0x05` and preserves the `MsgType` byte (offset 7).
 
@@ -140,10 +140,10 @@ senders (UDP/TCP)          proxy (N UDP workers + 1 TCP listener)
 ─────────────────          ─────────────────────────────────────
 tx_a  ──UDP──▶ [worker 0] ─▶ forwarder ─▶ FF05::B:3    ──▶ sub_X   (shard, data-plane)
 tx_b  ──UDP──▶ [worker 1] ─▶ forwarder ─▶ FF05::B:1    ──▶ sub_Y
-blk_c ──UDP──▶ [worker N] ─▶ forwarder ─▶ FF0E::B:FFFE ──▶ sub_Z   (CtrlGroupControl, BRC-131)
+blk_c ──UDP──▶ [worker N] ─▶ forwarder ─▶ FF0E::B:FFFE ──▶ sub_Z   (GroupBlockBroadcast, BRC-131)
 blk_d ──TCP──▶ [tcp conn] ─▶ forwarder ─▶ FF0E::B:FFFE ──▶ sub_Z
-anc_e ──UDP──▶ [worker N] ─▶ forwarder ─▶ FF0E::B:FFFE ──▶ sub_Z   (CtrlGroupControl, BRC-134)
-sub_f ──TCP──▶ [tcp conn] ─▶ forwarder ─▶ FF05::B:FFFB ──▶ sub_W   (CtrlGroupSubtreeAnnounce, BRC-132)
+anc_e ──UDP──▶ [worker N] ─▶ forwarder ─▶ FF0E::B:FFFE ──▶ sub_Z   (GroupBlockBroadcast, BRC-134)
+sub_f ──TCP──▶ [tcp conn] ─▶ forwarder ─▶ FF05::B:FFFB ──▶ sub_W   (GroupSubtreeAnnounce, BRC-132)
 ```
 
 ## Wire Format
@@ -300,6 +300,6 @@ Protocol primitives are provided by
 shard-common/
   frame/             BRC-12/BRC-124/BRC-128/BRC-131/BRC-132/BRC-134/BRC-135 wire format: Decode, Encode, constants
   shard/             txid → group index → IPv6 multicast address derivation;
-                     control group constants and ControlGroupAddr
+                     control group constants and GroupAddr
   seqhash/           XXH64 per-flow HashKey computation (senderIPv6 ∥ groupIdx ∥ subtreeID)
 ```

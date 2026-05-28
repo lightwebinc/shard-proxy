@@ -373,8 +373,8 @@ func (fw *Forwarder) fragment(targets []Target, f *frame.Frame, ip [16]byte, gro
 
 // ProcessBlock handles BRC-131 block control frames (FrameVer 0x04).
 // It validates the frame, stamps HashKey/SeqNum if needed, optionally
-// fragments large payloads via BRC-130, and forwards to the control
-// multicast group (CtrlGroupControl) instead of a shard group.
+// fragments large payloads via BRC-130, and forwards to the
+// GroupBlockBroadcast multicast group instead of a shard group.
 func (fw *Forwarder) ProcessBlock(targets []Target, raw []byte, src net.Addr, workerID int) {
 	bf, err := frame.DecodeBlock(raw)
 	if err != nil {
@@ -401,12 +401,12 @@ func (fw *Forwarder) ProcessBlock(targets []Target, raw []byte, src net.Addr, wo
 	if src != nil {
 		ip := addrToIPv6(src)
 		// BRC-131 block announces and BRC-133 coinbase txs share the
-		// CtrlGroupControl multicast destination but use distinct virtual
+		// GroupBlockBroadcast multicast destination but use distinct virtual
 		// HashKey ingredients so each carries its own independent SeqNum
 		// counter on the proxy.
-		ctrlIdx := uint32(shard.CtrlGroupControl)
+		ctrlIdx := uint32(shard.GroupBlockBroadcast)
 		if bf.MsgType == frame.BlockMsgCoinbase {
-			ctrlIdx = shard.CoinbaseFlowVirtualIdx
+			ctrlIdx = uint32(shard.GroupCoinbaseFlow)
 		}
 		var zeroSub [32]byte
 
@@ -422,7 +422,7 @@ func (fw *Forwarder) ProcessBlock(targets []Target, raw []byte, src net.Addr, wo
 		stampInPlace(raw, ip, ctrlIdx, zeroSub, fw)
 	}
 
-	dst := shard.ControlGroupAddr(fw.mcPrefix, fw.mcGroupID, shard.CtrlGroupControl)
+	dst := shard.GroupAddr(fw.mcPrefix, fw.mcGroupID, shard.GroupBlockBroadcast)
 	addr := &net.UDPAddr{IP: dst, Port: fw.egressPort}
 
 	for _, tgt := range targets {
@@ -452,8 +452,8 @@ func (fw *Forwarder) ProcessBlock(targets []Target, raw []byte, src net.Addr, wo
 // ProcessAnchor handles BRC-134 chained anchor transaction frames (FrameVer 0x06).
 // Anchor transactions are the root of a chain of dependent transactions and
 // must reach every subscriber regardless of shard assignment. They are
-// validated, HashKey/SeqNum-stamped, and forwarded to CtrlGroupControl
-// (FF0E::B:FFFE) — the same control-plane group as BRC-131 block frames.
+// validated, HashKey/SeqNum-stamped, and forwarded to GroupBlockBroadcast
+// (FF0E::B:FFFE) — the same multicast group as BRC-131 block frames.
 func (fw *Forwarder) ProcessAnchor(targets []Target, raw []byte, src net.Addr, workerID int) {
 	f, err := frame.DecodeAnchor(raw)
 	if err != nil {
@@ -480,15 +480,15 @@ func (fw *Forwarder) ProcessAnchor(targets []Target, raw []byte, src net.Addr, w
 		// Anchor frames use a dedicated virtual group index for HashKey
 		// derivation so they get their own independent SeqNum counter
 		// and flow identity, distinct from BRC-131/BRC-133 frames which
-		// share the same CtrlGroupControl multicast address.
+		// share the same GroupBlockBroadcast multicast address.
 		var zeroSub [32]byte
 
 		// Stamp HashKey/SeqNum in-place; HashKey is stamped even when SeqNum
 		// is pre-set so chain RL and cache keys are deterministic.
-		stampInPlace(raw, ip, shard.AnchorFlowVirtualIdx, zeroSub, fw)
+		stampInPlace(raw, ip, uint32(shard.GroupAnchorFlow), zeroSub, fw)
 	}
 
-	dst := shard.ControlGroupAddr(fw.mcPrefix, fw.mcGroupID, shard.CtrlGroupControl)
+	dst := shard.GroupAddr(fw.mcPrefix, fw.mcGroupID, shard.GroupBlockBroadcast)
 	addr := &net.UDPAddr{IP: dst, Port: fw.egressPort}
 
 	for _, tgt := range targets {
@@ -543,7 +543,7 @@ func (fw *Forwarder) fragmentBlock(targets []Target, raw []byte, bf *frame.Block
 	var zeroSub [32]byte
 
 	fragTotal := uint16(k)
-	dst := shard.ControlGroupAddr(fw.mcPrefix, fw.mcGroupID, shard.CtrlGroupControl)
+	dst := shard.GroupAddr(fw.mcPrefix, fw.mcGroupID, shard.GroupBlockBroadcast)
 	addr := &net.UDPAddr{IP: dst, Port: fw.egressPort}
 	buf := make([]byte, frame.HeaderSizeV3+dataSize)
 
@@ -606,7 +606,7 @@ func (fw *Forwarder) fragmentBlock(targets []Target, raw []byte, bf *frame.Block
 // ProcessSubtreeData handles BRC-132 subtree data frames (FrameVer 0x05).
 // It validates the frame, stamps HashKey/SeqNum per (sender, 0xFFFB, subtreeID)
 // flow, optionally fragments large payloads via BRC-130, and forwards to the
-// CtrlGroupSubtreeAnnounce multicast group.
+// GroupSubtreeAnnounce multicast group.
 func (fw *Forwarder) ProcessSubtreeData(targets []Target, raw []byte, src net.Addr, workerID int) {
 	sf, err := frame.DecodeSubtreeData(raw)
 	if err != nil {
@@ -632,7 +632,7 @@ func (fw *Forwarder) ProcessSubtreeData(targets []Target, raw []byte, src net.Ad
 
 	if src != nil {
 		ip := addrToIPv6(src)
-		ctrlIdx := uint32(shard.CtrlGroupSubtreeAnnounce)
+		ctrlIdx := uint32(shard.GroupSubtreeAnnounce)
 
 		// BRC-130 fragmentation path for large subtree data payloads.
 		if fw.fragDataSize > 0 && len(sf.Payload) > fw.fragDataSize {
@@ -645,7 +645,7 @@ func (fw *Forwarder) ProcessSubtreeData(targets []Target, raw []byte, src net.Ad
 		stampInPlace(raw, ip, ctrlIdx, sf.SubtreeID, fw)
 	}
 
-	dst := shard.ControlGroupAddr(fw.mcPrefix, fw.mcGroupID, shard.CtrlGroupSubtreeAnnounce)
+	dst := shard.GroupAddr(fw.mcPrefix, fw.mcGroupID, shard.GroupSubtreeAnnounce)
 	addr := &net.UDPAddr{IP: dst, Port: fw.egressPort}
 
 	for _, tgt := range targets {
@@ -673,7 +673,7 @@ func (fw *Forwarder) ProcessSubtreeData(targets []Target, raw []byte, src net.Ad
 }
 
 // fragmentSubtreeData splits a large BRC-132 subtree data payload into BRC-130
-// fragments and forwards each to the CtrlGroupSubtreeAnnounce group.
+// fragments and forwards each to the GroupSubtreeAnnounce group.
 // Each fragment receives OrigFrameVer=0x05 so that reassembly routes the
 // completed payload to processSubtreeDataFrame on the listener.
 // MsgType is preserved in byte 7 of each fragment datagram.
@@ -703,7 +703,7 @@ func (fw *Forwarder) fragmentSubtreeData(targets []Target, raw []byte, sf *frame
 	var zeroSub [32]byte
 
 	fragTotal := uint16(k)
-	dst := shard.ControlGroupAddr(fw.mcPrefix, fw.mcGroupID, shard.CtrlGroupSubtreeAnnounce)
+	dst := shard.GroupAddr(fw.mcPrefix, fw.mcGroupID, shard.GroupSubtreeAnnounce)
 	addr := &net.UDPAddr{IP: dst, Port: fw.egressPort}
 	buf := make([]byte, frame.HeaderSizeV3+dataSize)
 
@@ -767,12 +767,12 @@ func (fw *Forwarder) fragmentSubtreeData(targets []Target, raw []byte, sf *frame
 func (fw *Forwarder) EgressPort() int { return fw.egressPort }
 
 // ForwardControl sends a raw BRC-127 control datagram (e.g. SubtreeAnnounce)
-// to the given control-plane multicast group index on all egress targets.
-// The destination address is derived using [shard.ControlGroupAddr] with the
+// to the given network-service multicast group index on all egress targets.
+// The destination address is derived using [shard.GroupAddr] with the
 // engine's configured scope prefix and IANA group-id.
 // Unlike [Process], no sequence stamping or frame decoding is performed.
-func (fw *Forwarder) ForwardControl(targets []Target, raw []byte, ctrlGroupIdx uint16, port int) {
-	dst := shard.ControlGroupAddr(fw.mcPrefix, fw.mcGroupID, ctrlGroupIdx)
+func (fw *Forwarder) ForwardControl(targets []Target, raw []byte, idx shard.GroupIdx, port int) {
+	dst := shard.GroupAddr(fw.mcPrefix, fw.mcGroupID, idx)
 	addr := &net.UDPAddr{IP: dst, Port: port}
 	for _, tgt := range targets {
 		addr.Zone = tgt.Iface.Name
@@ -782,27 +782,13 @@ func (fw *Forwarder) ForwardControl(targets []Target, raw []byte, ctrlGroupIdx u
 		}
 	}
 	if fw.rec != nil {
-		fw.rec.ControlFrameForwarded(ctrlGroupName(ctrlGroupIdx))
+		fw.rec.ControlFrameForwarded(idx.String())
 	}
 	if fw.debug {
 		fw.log.Debug("control forwarded",
-			"ctrl_group", fmt.Sprintf("0x%04X", ctrlGroupIdx),
+			"group", idx.String(),
 			"dst", addr,
 		)
-	}
-}
-
-// ctrlGroupName returns a human-readable label for a control group index.
-func ctrlGroupName(idx uint16) string {
-	switch idx {
-	case shard.CtrlGroupSubtreeAnnounce:
-		return "subtree_announce"
-	case shard.CtrlGroupBeacon:
-		return "beacon"
-	case shard.CtrlGroupControl:
-		return "control"
-	default:
-		return fmt.Sprintf("0x%04x", idx)
 	}
 }
 
