@@ -39,7 +39,7 @@ func TestProcessV2_DedupClaimWins_ForwardProceeds(t *testing.T) {
 	fw.SetTxidDedup(d, "test:")
 
 	conn, _ := openLoopbackUDP(t)
-	tgts := makeTargets(t, conn)
+	tgts := makeEgress(t, fw, conn)
 	src := &net.UDPAddr{IP: net.ParseIP("::1"), Port: 12345}
 
 	raw := buildV2Frame(t, 0xAB, 0, []byte("p1"))
@@ -56,7 +56,7 @@ func TestProcessV2_DedupClaimLost_FrameDropped(t *testing.T) {
 	fw.SetTxidDedup(d, "test:")
 
 	conn, _ := openLoopbackUDP(t)
-	tgts := makeTargets(t, conn)
+	tgts := makeEgress(t, fw, conn)
 	src := &net.UDPAddr{IP: net.ParseIP("::1"), Port: 12345}
 
 	// Build a frame where SeqNum is zero (proxy would normally stamp it).
@@ -78,7 +78,7 @@ func TestProcessV2_SecondCallDedups(t *testing.T) {
 	fw.SetTxidDedup(d, "test:")
 
 	conn, _ := openLoopbackUDP(t)
-	tgts := makeTargets(t, conn)
+	tgts := makeEgress(t, fw, conn)
 	src := &net.UDPAddr{IP: net.ParseIP("::1"), Port: 12345}
 
 	// Two frames with the same TxID — second must be deduped.
@@ -101,7 +101,7 @@ func TestProcessV1_DedupBypassed(t *testing.T) {
 	fw.SetTxidDedup(d, "test:")
 
 	conn, _ := openLoopbackUDP(t)
-	tgts := makeTargets(t, conn)
+	tgts := makeEgress(t, fw, conn)
 	src := &net.UDPAddr{IP: net.ParseIP("::1"), Port: 12345}
 
 	raw := buildV1Frame(t, 0xFF, []byte("legacy"))

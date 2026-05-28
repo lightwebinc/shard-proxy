@@ -23,6 +23,7 @@ as fallbacks; hard-coded defaults apply when neither is present.
 | `-otlp-endpoint` | `OTLP_ENDPOINT` | `""` | OTLP gRPC endpoint (empty = disabled) |  |  |  |
 | `-otlp-interval` | `OTLP_INTERVAL` | `30s` | OTLP push interval |  |  |  |
 | `-frag-mtu` | `FRAG_MTU` | `0` | Path MTU for BRC-130 fragmentation (0 = disabled) |  |  |  |
+| `-recv-batch` | `BSP_RECV_BATCH` | `32` | Datagrams per `recvmmsg` syscall (1 = per-packet legacy path) |  |  |  |
 
 ---
 
@@ -34,8 +35,14 @@ pipeline; you may run both simultaneously.
 ### UDP ingress (default)
 
 UDP ingress uses `SO_REUSEPORT` to distribute incoming datagrams across all
-worker goroutines with no userspace coordination. This is the high-throughput
-path.
+worker goroutines with no userspace coordination. Each worker pulls up to
+`-recv-batch` datagrams per `recvmmsg(2)` syscall and flushes the
+corresponding egress queue once per batch via `sendmmsg(2)` (one syscall per
+target interface), amortising syscall cost across the batch. On platforms
+without `recvmmsg`/`sendmmsg` (macOS, FreeBSD) the `golang.org/x/net/ipv6`
+library transparently falls back to per-packet send/recv; the proxy is
+functionally identical but does not gain the syscall-amortisation speed-up.
+This is the high-throughput path.
 
 ```
 -udp-listen-port 9000   # (default)

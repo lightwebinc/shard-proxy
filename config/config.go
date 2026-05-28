@@ -22,6 +22,7 @@
 //	-otlp-endpoint        OTLP_ENDPOINT         ""        OTLP gRPC endpoint (empty = disabled)
 //	-otlp-interval        OTLP_INTERVAL         30s       OTLP push interval
 //	-frag-mtu             FRAG_MTU              0         Path MTU for BRC-130 fragmentation (0 = disabled)
+//	-recv-batch           BSP_RECV_BATCH        32        Datagrams per recvmmsg syscall (1 = per-packet)
 //	-txid-dedup-redis-addr TXID_DEDUP_REDIS_ADDR ""       Redis address for ingress TxID dedup (empty = local-only)
 //	-txid-dedup-prefix    TXID_DEDUP_PREFIX     bsp:tx:   Redis key prefix for ingress dedup entries
 //	-txid-dedup-ttl       TXID_DEDUP_TTL        10m       TTL for ingress dedup Redis entries (1m..30m typical)
@@ -83,6 +84,14 @@ type Config struct {
 	// Typical value: 1500 (Ethernet), 9000 (jumbo frames).
 	FragMTU int
 
+	// RecvBatch is the number of datagrams a worker requests per recvmmsg
+	// syscall (and matching default queue capacity for sendmmsg-style
+	// egress flushes). Larger values amortise the syscall cost across
+	// more packets at the cost of slightly higher per-packet latency at
+	// low ingress rates. Minimum 1 (per-packet, equivalent to the legacy
+	// path). Default 32.
+	RecvBatch int
+
 	// Observability
 	MetricsAddr  string        // HTTP bind address for /metrics, /healthz, /readyz
 	InstanceID   string        // OTel service.instance.id for federation; defaults to hostname
@@ -136,6 +145,8 @@ func Load() (*Config, error) {
 		"pre-drain delay before closing ingress sockets; /readyz returns 503 during this window (0 = disabled)")
 	flag.IntVar(&c.FragMTU, "frag-mtu", envInt("FRAG_MTU", 0),
 		"path MTU for BRC-130 fragmentation (0 = disabled; typical: 1500 for Ethernet, 9000 for jumbo)")
+	flag.IntVar(&c.RecvBatch, "recv-batch", envInt("BSP_RECV_BATCH", 32),
+		"datagrams per recvmmsg syscall (1 = per-packet legacy path; 32 default)")
 
 	flag.StringVar(&c.TxidDedupRedisAddr, "txid-dedup-redis-addr", envStr("TXID_DEDUP_REDIS_ADDR", ""),
 		"Redis address for ingress TxID dedup (empty = local-only tier-1 LRU)")
@@ -187,6 +198,12 @@ func Load() (*Config, error) {
 	// Default workers to NumCPU if the flag or env was set to zero.
 	if c.NumWorkers <= 0 {
 		c.NumWorkers = runtime.NumCPU()
+	}
+
+	// Clamp RecvBatch to a sane floor; 1 keeps the legacy per-packet
+	// semantics intact for sanity comparisons.
+	if c.RecvBatch < 1 {
+		c.RecvBatch = 1
 	}
 
 	// Parse and validate egress interfaces.

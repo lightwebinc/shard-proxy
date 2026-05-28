@@ -111,10 +111,20 @@ Two `MsgType` values are defined:
 
 ## Multi-CPU Design
 
-Each UDP worker goroutine owns one ingress socket bound via `SO_REUSEPORT` plus
-one egress socket per configured interface. The kernel distributes incoming
-datagrams across all workers with no userspace coordination. Forwarding logic
-is centralised in the shared `forwarder.Forwarder`.
+Each UDP worker goroutine owns one ingress socket bound via `SO_REUSEPORT`
+plus one egress socket per configured interface. The kernel distributes
+incoming datagrams across all workers with no userspace coordination.
+Forwarding logic is centralised in the shared `forwarder.Forwarder`.
+
+Workers process datagrams in batches: each iteration pulls up to
+`-recv-batch` ingress packets via `ipv6.PacketConn.ReadBatch` (one
+`recvmmsg(2)` syscall on Linux), dispatches each packet through the
+forwarder pipeline which enqueues outbound datagrams into a per-worker
+`forwarder.Egress`, then flushes that queue via `ipv6.PacketConn.WriteBatch`
+(one `sendmmsg(2)` syscall per egress interface). Per-flow `SeqNum`
+counters live in a 64-stripe map keyed on a hash of the sender IP, so
+concurrent workers contend on independent shards; once a flow's counter
+exists the increment is lock-free via `atomic.AddUint64`.
 
 ### TCP ingress
 
@@ -252,9 +262,14 @@ The hot path below applies to BRC-12/BRC-124/BRC-128 frames received via UDP:
    stamp `raw[40:48]` (HashKey) as `XXH64(senderIPv6 ∥ groupIdx ∥ subtreeID)` and
    `raw[48:56]` (SeqNum) as a monotonic per-flow counter, in-place. BRC-12 frames
    are always untouched.
-3. `WriteTo(raw)` — write the raw bytes to every egress target.
+3. `Egress.EnqueueData(raw)` — fan the raw bytes out into the worker's
+   outbound queue, one entry per egress interface.
+4. After every packet in the current receive batch has been processed,
+   `Egress.Flush()` dispatches one `WriteBatch` (sendmmsg) per target.
 
-No re-encoding, no per-worker encode buffer.
+No re-encoding, no per-worker encode buffer. The verbatim path references
+the receive-batch buffers directly; buffer reuse is safe because Flush
+completes before the next ReadBatch overwrites the same memory.
 
 BRC-131, BRC-132, and BRC-134 frames received via UDP or TCP follow parallel paths
 through `ProcessBlock`, `ProcessSubtreeData`, and `ProcessAnchor` respectively.
@@ -272,10 +287,12 @@ Shutdown proceeds in two phases when `SIGINT` or `SIGTERM` is received:
    forwarding in-flight packets.
 
 2. **Quiesce** — The `done` channel is closed. Each UDP worker and the TCP
-   listener close their ingress sockets, unblocking any pending `ReadFrom` /
-   `Accept` calls. Active TCP connections are force-closed so `handleConn`
-   goroutines do not hang. `main` waits for all goroutines via
-   `sync.WaitGroup`, then flushes the OTLP exporter before returning.
+   listener close their ingress sockets, unblocking any pending `ReadBatch` /
+   `Accept` calls. Each UDP worker runs a deferred `Egress.Flush()` so the
+   last receive batch's egress is not lost. Active TCP connections are
+   force-closed so `handleConn` goroutines do not hang. `main` waits for
+   all goroutines via `sync.WaitGroup`, then flushes the OTLP exporter
+   before returning.
 
 ## Package Structure
 
@@ -286,10 +303,12 @@ shard-proxy/
   forwarder/         decode → zero-copy verbatim forward pipeline;
                      Process (BRC-12/BRC-124/BRC-128), ProcessBlock (BRC-131),
                      ProcessSubtreeData (BRC-132), ProcessAnchor (BRC-134),
-                     BRC-130 fragmentation
-  worker/            per-CPU SO_REUSEPORT UDP ingress loop with frame-version dispatch
-                     for BRC-131/BRC-132/BRC-134 (worker.go);
-                     TCP ingress listener with BRC-127 routing (tcp.go)
+                     BRC-130 fragmentation; per-worker Egress batcher with
+                     sync.Pool fragment buffers (egress.go)
+  worker/            per-CPU SO_REUSEPORT UDP ingress loop using recvmmsg
+                     (ReadBatch) with frame-version dispatch for BRC-131/
+                     BRC-132/BRC-134 (worker.go); TCP ingress listener with
+                     BRC-127 routing (tcp.go)
   metrics/           OTel + Prometheus instrumentation
 ```
 

@@ -101,15 +101,24 @@ func (ti *TCPIngress) Run(listenAddr string, listenPort int, done <-chan struct{
 				<-done
 				_ = conn.Close()
 			}()
-			ti.handleConn(conn, targets)
+			// Each connection owns its own Egress so the shared multicast
+			// egress sockets are not mutated concurrently across goroutines.
+			// TCP is reliability-oriented rather than throughput-oriented,
+			// so we flush per-frame to keep latency low instead of
+			// accumulating a batch.
+			egr := forwarder.NewEgress(ti.fwd, targets, 1, ti.rec)
+			defer egr.Flush()
+			ti.handleConn(conn, egr)
 		}()
 	}
 }
 
-// handleConn reads a stream of BRC-12, BRC-124, or BRC-128 frames from conn and forwards each.
-// The connection is closed on any read error or protocol violation.
-// Each goroutine owns its own encode and assembly buffers.
-func (ti *TCPIngress) handleConn(conn net.Conn, targets []forwarder.Target) {
+// handleConn reads a stream of BRC-12, BRC-124, or BRC-128 frames from conn
+// and forwards each via the per-connection Egress. The connection is closed
+// on any read error or protocol violation. Each goroutine owns its own
+// encode and assembly buffers; egr is flushed once per frame so latency
+// for reliable-delivery senders is not held up by batching.
+func (ti *TCPIngress) handleConn(conn net.Conn, egr *forwarder.Egress) {
 	defer func() { _ = conn.Close() }()
 	remote := conn.RemoteAddr()
 	ti.log.Debug("TCP connection accepted", "remote", remote)
@@ -148,7 +157,10 @@ func (ti *TCPIngress) handleConn(conn net.Conn, targets []forwarder.Target) {
 			if ti.rec != nil {
 				ti.rec.TCPBytesReceived(frame.SubtreeAnnounceSize)
 			}
-			ti.fwd.ForwardControl(targets, ctrlBuf[:], shard.GroupSubtreeGroupAnnounce, ti.fwd.EgressPort())
+			ti.fwd.ForwardControl(egr, ctrlBuf[:], shard.GroupSubtreeGroupAnnounce, ti.fwd.EgressPort())
+			if egr != nil {
+				egr.Flush()
+			}
 			continue
 		case frame.FrameVerV1:
 			hdrSize = frame.HeaderSizeLegacy
@@ -186,13 +198,17 @@ func (ti *TCPIngress) handleConn(conn net.Conn, targets []forwarder.Target) {
 		}
 		switch frameBuf[6] {
 		case frame.FrameVerV4:
-			ti.fwd.ProcessBlock(targets, frameBuf, remote, -1)
+			ti.fwd.ProcessBlock(egr, frameBuf, remote, -1)
 		case frame.FrameVerV5:
-			ti.fwd.ProcessSubtreeData(targets, frameBuf, remote, -1)
+			ti.fwd.ProcessSubtreeData(egr, frameBuf, remote, -1)
 		case frame.FrameVerV6:
-			ti.fwd.ProcessAnchor(targets, frameBuf, remote, -1)
+			ti.fwd.ProcessAnchor(egr, frameBuf, remote, -1)
 		default:
-			ti.fwd.Process(targets, frameBuf, remote, -1)
+			ti.fwd.Process(egr, frameBuf, remote, -1)
+		}
+		// TCP path: flush per frame to keep reliable-delivery latency low.
+		if egr != nil {
+			egr.Flush()
 		}
 	}
 }

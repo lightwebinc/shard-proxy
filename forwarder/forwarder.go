@@ -14,6 +14,10 @@
 //     starting at 1. Each subtree therefore owns an independent sequence so
 //     loss in one subtree cannot create false gaps in another.
 //
+// Per-flow counters live in a striped map (chainStripes) so concurrent
+// workers contend on independent shards rather than a single mutex. Once a
+// flow entry exists, counter increment is lock-free via atomic.Uint64.
+//
 // # BRC-130 fragmentation
 //
 // When [Forwarder.SetFragMTU] is called with a positive MTU, BRC-124/BRC-128
@@ -25,21 +29,28 @@
 //
 // BRC-12 frames are always forwarded verbatim.
 //
-// # Egress socket lifecycle
+// # Egress lifecycle
 //
 // [Forwarder.OpenTargets] opens one UDP socket per interface with
-// IPV6_MULTICAST_IF applied. Pass the returned slice to every [Forwarder.Process]
-// call and release with [CloseTargets] during graceful shutdown.
+// IPV6_MULTICAST_IF applied and wraps it in an [ipv6.PacketConn] cached on
+// the returned [Target] for batched WriteBatch (sendmmsg on Linux). Each
+// worker constructs an [Egress] over the targets and passes it to every
+// Process* call; the worker calls [Egress.Flush] at the end of each receive
+// batch and once more during graceful shutdown to drain in-flight messages.
+// Sockets are released with [CloseTargets].
 package forwarder
 
 import (
 	"encoding/binary"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"syscall"
 
+	"golang.org/x/net/ipv6"
 	"golang.org/x/sys/unix"
 
 	"github.com/lightwebinc/shard-common/frame"
@@ -55,15 +66,32 @@ type chainKey struct {
 	sub [32]byte
 }
 
-// flowState holds the monotonic per-flow SeqNum counter.
+// flowState holds the monotonic per-flow SeqNum counter. The counter is
+// incremented lock-free; the enclosing stripe lock is held only for the
+// map lookup/insert that resolves *flowState the first time a flow appears.
 type flowState struct {
-	counter uint64
+	counter atomic.Uint64
 }
 
-// Target pairs a network interface with its pre-opened multicast egress socket.
+// chainStripes is the shard count of the striped per-flow counter map.
+// Power-of-two so stripe selection is a single bit-mask. 64 stripes give
+// each worker plenty of headroom even on high-core hosts.
+const chainStripes = 64
+
+// chainStripe is one shard of the per-flow counter map. Each stripe owns
+// an independent mutex; concurrent workers contend on independent shards.
+type chainStripe struct {
+	mu sync.Mutex
+	m  map[chainKey]*flowState
+}
+
+// Target pairs a network interface with its pre-opened multicast egress
+// socket and the cached ipv6.PacketConn wrapper used for batched WriteBatch
+// (sendmmsg) calls during Egress.Flush.
 type Target struct {
 	Iface *net.Interface
 	Conn  *net.UDPConn
+	PC    *ipv6.PacketConn
 }
 
 // ipv6UDPOverhead is the fixed per-datagram overhead subtracted from the
@@ -104,8 +132,12 @@ type Forwarder struct {
 	txDedup       TxidDedup
 	txDedupPrefix string
 
-	mu     sync.Mutex
-	chains map[chainKey]*flowState
+	// chains is a striped per-flow counter map. Stripe index is derived
+	// from a hash of the sender IP, so concurrent workers handling distinct
+	// senders rarely contend on the same stripe lock. Once a flowState
+	// entry exists the counter is incremented lock-free via atomic.Uint64;
+	// the stripe lock guards only the map lookup/insert path.
+	chains [chainStripes]chainStripe
 }
 
 // SetTxidDedup attaches a TxID claim store used to suppress ingress
@@ -148,7 +180,7 @@ func (fw *Forwarder) claimIngress(txid [32]byte, frameType, iface string, worker
 //   - debug: enable per-packet debug logging.
 //   - rec: metrics recorder; may be nil.
 func New(engine *shard.Engine, mcPrefix uint16, mcGroupID uint16, egressPort int, debug bool, rec *metrics.Recorder) *Forwarder {
-	return &Forwarder{
+	fw := &Forwarder{
 		engine:     engine,
 		mcPrefix:   mcPrefix,
 		mcGroupID:  mcGroupID,
@@ -156,13 +188,17 @@ func New(engine *shard.Engine, mcPrefix uint16, mcGroupID uint16, egressPort int
 		debug:      debug,
 		rec:        rec,
 		log:        slog.Default().With("component", "forwarder"),
-		chains:     make(map[chainKey]*flowState),
 	}
+	for i := range fw.chains {
+		fw.chains[i].m = make(map[chainKey]*flowState)
+	}
+	return fw
 }
 
-// OpenTargets opens one multicast egress UDP socket per interface. On worker 0
-// (probeWorker == true) each socket is probed with a zero-byte send to verify
-// multicast egress is functional.
+// OpenTargets opens one multicast egress UDP socket per interface and wraps
+// each in an ipv6.PacketConn for batched WriteBatch (sendmmsg on Linux) calls.
+// On worker 0 (probeWorker == true) each socket is probed with a zero-byte
+// send to verify multicast egress is functional.
 //
 // On error, all partially opened sockets are closed before returning.
 func (fw *Forwarder) OpenTargets(ifaces []*net.Interface, probeWorker bool) ([]Target, error) {
@@ -184,7 +220,11 @@ func (fw *Forwarder) OpenTargets(ifaces []*net.Interface, probeWorker bool) ([]T
 				return nil, fmt.Errorf("forwarder: egress probe (%s): %w", iface.Name, err)
 			}
 		}
-		targets = append(targets, Target{Iface: iface, Conn: conn})
+		targets = append(targets, Target{
+			Iface: iface,
+			Conn:  conn,
+			PC:    ipv6.NewPacketConn(conn),
+		})
 	}
 	return targets, nil
 }
@@ -213,19 +253,25 @@ func (fw *Forwarder) SetFragMTU(mtu int) {
 	}
 }
 
-// Process is the hot path: decode raw for routing, conditionally stamp HashKey/SeqNum, then forward.
+// Process is the hot path: decode raw for routing, conditionally stamp
+// HashKey/SeqNum, then enqueue into egr for batched egress via Egress.Flush.
 //
 // For BRC-124/BRC-128 frames: if raw[48:56] (SeqNum) is non-zero the sender has
 // pre-stamped the frame and it is forwarded verbatim. If SeqNum is zero the
 // proxy stamps raw[40:48] (HashKey) and raw[48:56] (SeqNum) in-place: HashKey is
 // stable per (sender, group, subtree) flow; SeqNum is a per-flow monotonic counter
-// starting at 1. BRC-12 frames are always forwarded verbatim. workerID is used only for metrics labels.
-func (fw *Forwarder) Process(targets []Target, raw []byte, src net.Addr, workerID int) {
+// starting at 1. BRC-12 frames are always forwarded verbatim. workerID is used
+// only for metrics labels.
+//
+// raw must remain valid until egr.Flush returns. egr may be nil; in that
+// case the frame is decoded and stamped but not enqueued — used by tests
+// that exercise only the stamping logic.
+func (fw *Forwarder) Process(egr *Egress, raw []byte, src net.Addr, workerID int) {
 	f, err := frame.Decode(raw)
 	if err != nil {
 		fw.log.Debug("frame decode error", "err", err, "len", len(raw))
-		if fw.rec != nil && len(targets) > 0 {
-			fw.rec.PacketDropped(targets[0].Iface.Name, workerID, "decode_error")
+		if fw.rec != nil && egr != nil && len(egr.targets) > 0 {
+			fw.rec.PacketDropped(egr.targets[0].Iface.Name, workerID, "decode_error")
 		}
 		return
 	}
@@ -236,8 +282,8 @@ func (fw *Forwarder) Process(targets []Target, raw []byte, src net.Addr, workerI
 	// listeners cannot dedup them downstream either.
 	if f.Version == frame.FrameVerV2 {
 		ifaceName := ""
-		if len(targets) > 0 {
-			ifaceName = targets[0].Iface.Name
+		if egr != nil && len(egr.targets) > 0 {
+			ifaceName = egr.targets[0].Iface.Name
 		}
 		if !fw.claimIngress(f.TxID, "brc124", ifaceName, workerID) {
 			return
@@ -251,7 +297,7 @@ func (fw *Forwarder) Process(targets []Target, raw []byte, src net.Addr, workerI
 
 		// BRC-130 fragmentation path: payload exceeds per-datagram capacity.
 		if fw.fragDataSize > 0 && len(f.Payload) > fw.fragDataSize {
-			fw.fragment(targets, f, ip, groupIdx, workerID)
+			fw.fragment(egr, f, ip, groupIdx, workerID)
 			return
 		}
 
@@ -262,22 +308,12 @@ func (fw *Forwarder) Process(targets []Target, raw []byte, src net.Addr, workerI
 		stampInPlace(raw, ip, groupIdx, f.SubtreeID, fw)
 	}
 
-	dst := fw.engine.Addr(groupIdx, fw.egressPort)
-
-	for _, tgt := range targets {
-		dst.Zone = tgt.Iface.Name
-		if _, err := tgt.Conn.WriteTo(raw, dst); err != nil {
-			fw.log.Warn("WriteTo error", "iface", tgt.Iface.Name, "dst", dst, "err", err)
-			if fw.rec != nil {
-				fw.rec.PacketDropped(tgt.Iface.Name, workerID, "write_error")
-				fw.rec.EgressError(tgt.Iface.Name, workerID)
-			}
-			continue
-		}
-		if fw.rec != nil {
-			fw.rec.PacketForwarded(tgt.Iface.Name, workerID, groupIdx, len(raw))
-		}
+	if egr == nil {
+		return
 	}
+
+	dst := fw.engine.Addr(groupIdx, fw.egressPort)
+	egr.EnqueueData(raw, *dst, groupIdx, workerID)
 
 	if fw.debug {
 		fw.log.Debug("forwarded",
@@ -289,10 +325,12 @@ func (fw *Forwarder) Process(targets []Target, raw []byte, src net.Addr, workerI
 	}
 }
 
-// fragment splits f.Payload into BRC-130 fragment datagrams and forwards each
-// to all targets. Each fragment receives an independent HashKey+SeqNum pair
-// allocated from the same flow as a regular frame would use.
-func (fw *Forwarder) fragment(targets []Target, f *frame.Frame, ip [16]byte, groupIdx uint32, workerID int) {
+// fragment splits f.Payload into BRC-130 fragment datagrams and enqueues each
+// for fan-out to every target. Each fragment receives an independent
+// HashKey+SeqNum pair allocated from the same flow as a regular frame would
+// use. Fragment buffers come from the Egress sync.Pool and are released back
+// at Flush time.
+func (fw *Forwarder) fragment(egr *Egress, f *frame.Frame, ip [16]byte, groupIdx uint32, workerID int) {
 	payload := f.Payload
 	origLen := uint32(len(payload))
 	dataSize := fw.fragDataSize
@@ -316,7 +354,6 @@ func (fw *Forwarder) fragment(targets []Target, f *frame.Frame, ip [16]byte, gro
 
 	fragTotal := uint16(k)
 	dst := fw.engine.Addr(groupIdx, fw.egressPort)
-	buf := make([]byte, frame.HeaderSizeV3+dataSize)
 
 	for i := 0; i < k; i++ {
 		start := i * dataSize
@@ -327,7 +364,14 @@ func (fw *Forwarder) fragment(targets []Target, f *frame.Frame, ip [16]byte, gro
 		fragData := payload[start:end]
 
 		hashKey, seqNum := fw.nextSeq(ip, groupIdx, f.SubtreeID)
+		if egr == nil {
+			// Tests exercise fragment() with no egress to verify seq
+			// allocation only — skip encode + queue.
+			continue
+		}
 
+		bufPtr := egr.PoolGet()
+		buf := *bufPtr
 		n, err := frame.EncodeFragment(
 			buf,
 			f.TxID,
@@ -342,23 +386,10 @@ func (fw *Forwarder) fragment(targets []Target, f *frame.Frame, ip [16]byte, gro
 		)
 		if err != nil {
 			fw.log.Error("EncodeFragment error", "err", err)
+			egr.pool.Put(bufPtr)
 			continue
 		}
-
-		for _, tgt := range targets {
-			dst.Zone = tgt.Iface.Name
-			if _, werr := tgt.Conn.WriteTo(buf[:n], dst); werr != nil {
-				fw.log.Warn("WriteTo fragment error", "iface", tgt.Iface.Name, "dst", dst, "err", werr)
-				if fw.rec != nil {
-					fw.rec.PacketDropped(tgt.Iface.Name, workerID, "write_error")
-					fw.rec.EgressError(tgt.Iface.Name, workerID)
-				}
-				continue
-			}
-			if fw.rec != nil {
-				fw.rec.PacketForwarded(tgt.Iface.Name, workerID, groupIdx, n)
-			}
-		}
+		egr.EnqueueDataPooled(buf[:n], *dst, groupIdx, workerID, bufPtr)
 	}
 
 	if fw.debug {
@@ -373,14 +404,16 @@ func (fw *Forwarder) fragment(targets []Target, f *frame.Frame, ip [16]byte, gro
 
 // ProcessBlock handles BRC-131 block control frames (FrameVer 0x04).
 // It validates the frame, stamps HashKey/SeqNum if needed, optionally
-// fragments large payloads via BRC-130, and forwards to the
+// fragments large payloads via BRC-130, and enqueues into egr for the
 // GroupBlockBroadcast multicast group instead of a shard group.
-func (fw *Forwarder) ProcessBlock(targets []Target, raw []byte, src net.Addr, workerID int) {
+//
+// raw must remain valid until egr.Flush returns. egr may be nil for tests.
+func (fw *Forwarder) ProcessBlock(egr *Egress, raw []byte, src net.Addr, workerID int) {
 	bf, err := frame.DecodeBlock(raw)
 	if err != nil {
 		fw.log.Debug("block frame decode error", "err", err, "len", len(raw))
-		if fw.rec != nil && len(targets) > 0 {
-			fw.rec.PacketDropped(targets[0].Iface.Name, workerID, "decode_error")
+		if fw.rec != nil && egr != nil && len(egr.targets) > 0 {
+			fw.rec.PacketDropped(egr.targets[0].Iface.Name, workerID, "decode_error")
 		}
 		return
 	}
@@ -390,8 +423,8 @@ func (fw *Forwarder) ProcessBlock(targets []Target, raw []byte, src net.Addr, wo
 	// purposes so the same block is never multicasted twice by sibling proxies.
 	{
 		ifaceName := ""
-		if len(targets) > 0 {
-			ifaceName = targets[0].Iface.Name
+		if egr != nil && len(egr.targets) > 0 {
+			ifaceName = egr.targets[0].Iface.Name
 		}
 		if !fw.claimIngress(bf.ContentID, "brc131", ifaceName, workerID) {
 			return
@@ -412,7 +445,7 @@ func (fw *Forwarder) ProcessBlock(targets []Target, raw []byte, src net.Addr, wo
 
 		// BRC-130 fragmentation path for large block payloads.
 		if fw.fragDataSize > 0 && len(bf.Payload) > fw.fragDataSize {
-			fw.fragmentBlock(targets, raw, bf, ip, ctrlIdx, workerID)
+			fw.fragmentBlock(egr, raw, bf, ip, ctrlIdx, workerID)
 			return
 		}
 
@@ -422,23 +455,13 @@ func (fw *Forwarder) ProcessBlock(targets []Target, raw []byte, src net.Addr, wo
 		stampInPlace(raw, ip, ctrlIdx, zeroSub, fw)
 	}
 
-	dst := shard.GroupAddr(fw.mcPrefix, fw.mcGroupID, shard.GroupBlockBroadcast)
-	addr := &net.UDPAddr{IP: dst, Port: fw.egressPort}
-
-	for _, tgt := range targets {
-		addr.Zone = tgt.Iface.Name
-		if _, err := tgt.Conn.WriteTo(raw, addr); err != nil {
-			fw.log.Warn("WriteTo block error", "iface", tgt.Iface.Name, "dst", addr, "err", err)
-			if fw.rec != nil {
-				fw.rec.PacketDropped(tgt.Iface.Name, workerID, "write_error")
-				fw.rec.EgressError(tgt.Iface.Name, workerID)
-			}
-			continue
-		}
-		if fw.rec != nil {
-			fw.rec.ControlFrameForwarded("block_control")
-		}
+	if egr == nil {
+		return
 	}
+
+	dst := shard.GroupAddr(fw.mcPrefix, fw.mcGroupID, shard.GroupBlockBroadcast)
+	addr := net.UDPAddr{IP: dst, Port: fw.egressPort}
+	egr.EnqueueControl(raw, addr, "block_control", workerID)
 
 	if fw.debug {
 		fw.log.Debug("block forwarded",
@@ -452,14 +475,16 @@ func (fw *Forwarder) ProcessBlock(targets []Target, raw []byte, src net.Addr, wo
 // ProcessAnchor handles BRC-134 chained anchor transaction frames (FrameVer 0x06).
 // Anchor transactions are the root of a chain of dependent transactions and
 // must reach every subscriber regardless of shard assignment. They are
-// validated, HashKey/SeqNum-stamped, and forwarded to GroupBlockBroadcast
+// validated, HashKey/SeqNum-stamped, and enqueued for GroupBlockBroadcast
 // (FF0E::B:FFFE) — the same multicast group as BRC-131 block frames.
-func (fw *Forwarder) ProcessAnchor(targets []Target, raw []byte, src net.Addr, workerID int) {
+//
+// raw must remain valid until egr.Flush returns. egr may be nil for tests.
+func (fw *Forwarder) ProcessAnchor(egr *Egress, raw []byte, src net.Addr, workerID int) {
 	f, err := frame.DecodeAnchor(raw)
 	if err != nil {
 		fw.log.Debug("anchor frame decode error", "err", err, "len", len(raw))
-		if fw.rec != nil && len(targets) > 0 {
-			fw.rec.PacketDropped(targets[0].Iface.Name, workerID, "decode_error")
+		if fw.rec != nil && egr != nil && len(egr.targets) > 0 {
+			fw.rec.PacketDropped(egr.targets[0].Iface.Name, workerID, "decode_error")
 		}
 		return
 	}
@@ -467,8 +492,8 @@ func (fw *Forwarder) ProcessAnchor(targets []Target, raw []byte, src net.Addr, w
 	// Ingress TxID dedup gate for BRC-134 anchor frames.
 	{
 		ifaceName := ""
-		if len(targets) > 0 {
-			ifaceName = targets[0].Iface.Name
+		if egr != nil && len(egr.targets) > 0 {
+			ifaceName = egr.targets[0].Iface.Name
 		}
 		if !fw.claimIngress(f.TxID, "brc134", ifaceName, workerID) {
 			return
@@ -488,23 +513,13 @@ func (fw *Forwarder) ProcessAnchor(targets []Target, raw []byte, src net.Addr, w
 		stampInPlace(raw, ip, uint32(shard.GroupAnchorFlow), zeroSub, fw)
 	}
 
-	dst := shard.GroupAddr(fw.mcPrefix, fw.mcGroupID, shard.GroupBlockBroadcast)
-	addr := &net.UDPAddr{IP: dst, Port: fw.egressPort}
-
-	for _, tgt := range targets {
-		addr.Zone = tgt.Iface.Name
-		if _, err := tgt.Conn.WriteTo(raw, addr); err != nil {
-			fw.log.Warn("WriteTo anchor error", "iface", tgt.Iface.Name, "dst", addr, "err", err)
-			if fw.rec != nil {
-				fw.rec.PacketDropped(tgt.Iface.Name, workerID, "write_error")
-				fw.rec.EgressError(tgt.Iface.Name, workerID)
-			}
-			continue
-		}
-		if fw.rec != nil {
-			fw.rec.ControlFrameForwarded("anchor")
-		}
+	if egr == nil {
+		return
 	}
+
+	dst := shard.GroupAddr(fw.mcPrefix, fw.mcGroupID, shard.GroupBlockBroadcast)
+	addr := net.UDPAddr{IP: dst, Port: fw.egressPort}
+	egr.EnqueueControl(raw, addr, "anchor", workerID)
 
 	if fw.debug {
 		fw.log.Debug("anchor forwarded",
@@ -515,9 +530,10 @@ func (fw *Forwarder) ProcessAnchor(targets []Target, raw []byte, src net.Addr, w
 }
 
 // fragmentBlock splits a large BRC-131 block payload into BRC-130 fragments
-// and forwards each to the control group. Each fragment receives OrigFrameVer=0x04
-// so that reassembly can reconstruct the correct frame version.
-func (fw *Forwarder) fragmentBlock(targets []Target, raw []byte, bf *frame.BlockFrame, ip [16]byte, ctrlIdx uint32, workerID int) {
+// and enqueues each for the GroupBlockBroadcast control group. Each
+// fragment receives OrigFrameVer=0x04 so that reassembly can reconstruct
+// the correct frame version. Fragment buffers come from the Egress pool.
+func (fw *Forwarder) fragmentBlock(egr *Egress, raw []byte, bf *frame.BlockFrame, ip [16]byte, ctrlIdx uint32, workerID int) {
 	payload := bf.Payload
 	origLen := uint32(len(payload))
 	dataSize := fw.fragDataSize
@@ -544,8 +560,7 @@ func (fw *Forwarder) fragmentBlock(targets []Target, raw []byte, bf *frame.Block
 
 	fragTotal := uint16(k)
 	dst := shard.GroupAddr(fw.mcPrefix, fw.mcGroupID, shard.GroupBlockBroadcast)
-	addr := &net.UDPAddr{IP: dst, Port: fw.egressPort}
-	buf := make([]byte, frame.HeaderSizeV3+dataSize)
+	addr := net.UDPAddr{IP: dst, Port: fw.egressPort}
 
 	for i := 0; i < k; i++ {
 		start := i * dataSize
@@ -556,7 +571,12 @@ func (fw *Forwarder) fragmentBlock(targets []Target, raw []byte, bf *frame.Block
 		fragData := payload[start:end]
 
 		hashKey, seqNum := fw.nextSeq(ip, ctrlIdx, zeroSub)
+		if egr == nil {
+			continue
+		}
 
+		bufPtr := egr.PoolGet()
+		buf := *bufPtr
 		n, err := frame.EncodeFragment(
 			buf,
 			contentID,
@@ -571,6 +591,7 @@ func (fw *Forwarder) fragmentBlock(targets []Target, raw []byte, bf *frame.Block
 		)
 		if err != nil {
 			fw.log.Error("EncodeFragment block error", "err", err)
+			egr.pool.Put(bufPtr)
 			continue
 		}
 
@@ -578,20 +599,7 @@ func (fw *Forwarder) fragmentBlock(targets []Target, raw []byte, bf *frame.Block
 		// reassembler can reconstruct the full V4 header.
 		buf[7] = raw[7]
 
-		for _, tgt := range targets {
-			addr.Zone = tgt.Iface.Name
-			if _, werr := tgt.Conn.WriteTo(buf[:n], addr); werr != nil {
-				fw.log.Warn("WriteTo block fragment error", "iface", tgt.Iface.Name, "dst", addr, "err", werr)
-				if fw.rec != nil {
-					fw.rec.PacketDropped(tgt.Iface.Name, workerID, "write_error")
-					fw.rec.EgressError(tgt.Iface.Name, workerID)
-				}
-				continue
-			}
-			if fw.rec != nil {
-				fw.rec.ControlFrameForwarded("block_control")
-			}
-		}
+		egr.EnqueueControlPooled(buf[:n], addr, "block_control", workerID, bufPtr)
 	}
 
 	if fw.debug {
@@ -605,14 +613,16 @@ func (fw *Forwarder) fragmentBlock(targets []Target, raw []byte, bf *frame.Block
 
 // ProcessSubtreeData handles BRC-132 subtree data frames (FrameVer 0x05).
 // It validates the frame, stamps HashKey/SeqNum per (sender, 0xFFFB, subtreeID)
-// flow, optionally fragments large payloads via BRC-130, and forwards to the
-// GroupSubtreeAnnounce multicast group.
-func (fw *Forwarder) ProcessSubtreeData(targets []Target, raw []byte, src net.Addr, workerID int) {
+// flow, optionally fragments large payloads via BRC-130, and enqueues for
+// the GroupSubtreeAnnounce multicast group.
+//
+// raw must remain valid until egr.Flush returns. egr may be nil for tests.
+func (fw *Forwarder) ProcessSubtreeData(egr *Egress, raw []byte, src net.Addr, workerID int) {
 	sf, err := frame.DecodeSubtreeData(raw)
 	if err != nil {
 		fw.log.Debug("subtree data frame decode error", "err", err, "len", len(raw))
-		if fw.rec != nil && len(targets) > 0 {
-			fw.rec.PacketDropped(targets[0].Iface.Name, workerID, "decode_error")
+		if fw.rec != nil && egr != nil && len(egr.targets) > 0 {
+			fw.rec.PacketDropped(egr.targets[0].Iface.Name, workerID, "decode_error")
 		}
 		return
 	}
@@ -622,8 +632,8 @@ func (fw *Forwarder) ProcessSubtreeData(targets []Target, raw []byte, src net.Ad
 	// or ContentID for V4).
 	{
 		ifaceName := ""
-		if len(targets) > 0 {
-			ifaceName = targets[0].Iface.Name
+		if egr != nil && len(egr.targets) > 0 {
+			ifaceName = egr.targets[0].Iface.Name
 		}
 		if !fw.claimIngress(sf.SubtreeID, "brc132", ifaceName, workerID) {
 			return
@@ -636,7 +646,7 @@ func (fw *Forwarder) ProcessSubtreeData(targets []Target, raw []byte, src net.Ad
 
 		// BRC-130 fragmentation path for large subtree data payloads.
 		if fw.fragDataSize > 0 && len(sf.Payload) > fw.fragDataSize {
-			fw.fragmentSubtreeData(targets, raw, sf, ip, ctrlIdx, workerID)
+			fw.fragmentSubtreeData(egr, raw, sf, ip, ctrlIdx, workerID)
 			return
 		}
 
@@ -645,23 +655,13 @@ func (fw *Forwarder) ProcessSubtreeData(targets []Target, raw []byte, src net.Ad
 		stampInPlace(raw, ip, ctrlIdx, sf.SubtreeID, fw)
 	}
 
-	dst := shard.GroupAddr(fw.mcPrefix, fw.mcGroupID, shard.GroupSubtreeAnnounce)
-	addr := &net.UDPAddr{IP: dst, Port: fw.egressPort}
-
-	for _, tgt := range targets {
-		addr.Zone = tgt.Iface.Name
-		if _, err := tgt.Conn.WriteTo(raw, addr); err != nil {
-			fw.log.Warn("WriteTo subtree data error", "iface", tgt.Iface.Name, "dst", addr, "err", err)
-			if fw.rec != nil {
-				fw.rec.PacketDropped(tgt.Iface.Name, workerID, "write_error")
-				fw.rec.EgressError(tgt.Iface.Name, workerID)
-			}
-			continue
-		}
-		if fw.rec != nil {
-			fw.rec.ControlFrameForwarded("subtree_data")
-		}
+	if egr == nil {
+		return
 	}
+
+	dst := shard.GroupAddr(fw.mcPrefix, fw.mcGroupID, shard.GroupSubtreeAnnounce)
+	addr := net.UDPAddr{IP: dst, Port: fw.egressPort}
+	egr.EnqueueControl(raw, addr, "subtree_data", workerID)
 
 	if fw.debug {
 		fw.log.Debug("subtree data forwarded",
@@ -673,11 +673,12 @@ func (fw *Forwarder) ProcessSubtreeData(targets []Target, raw []byte, src net.Ad
 }
 
 // fragmentSubtreeData splits a large BRC-132 subtree data payload into BRC-130
-// fragments and forwards each to the GroupSubtreeAnnounce group.
+// fragments and enqueues each for the GroupSubtreeAnnounce control group.
 // Each fragment receives OrigFrameVer=0x05 so that reassembly routes the
 // completed payload to processSubtreeDataFrame on the listener.
 // MsgType is preserved in byte 7 of each fragment datagram.
-func (fw *Forwarder) fragmentSubtreeData(targets []Target, raw []byte, sf *frame.SubtreeDataFrame, ip [16]byte, ctrlIdx uint32, workerID int) {
+// Fragment buffers come from the Egress pool.
+func (fw *Forwarder) fragmentSubtreeData(egr *Egress, raw []byte, sf *frame.SubtreeDataFrame, ip [16]byte, ctrlIdx uint32, workerID int) {
 	payload := sf.Payload
 	origLen := uint32(len(payload))
 	dataSize := fw.fragDataSize
@@ -704,8 +705,7 @@ func (fw *Forwarder) fragmentSubtreeData(targets []Target, raw []byte, sf *frame
 
 	fragTotal := uint16(k)
 	dst := shard.GroupAddr(fw.mcPrefix, fw.mcGroupID, shard.GroupSubtreeAnnounce)
-	addr := &net.UDPAddr{IP: dst, Port: fw.egressPort}
-	buf := make([]byte, frame.HeaderSizeV3+dataSize)
+	addr := net.UDPAddr{IP: dst, Port: fw.egressPort}
 
 	for i := 0; i < k; i++ {
 		start := i * dataSize
@@ -716,7 +716,12 @@ func (fw *Forwarder) fragmentSubtreeData(targets []Target, raw []byte, sf *frame
 		fragData := payload[start:end]
 
 		hashKey, seqNum := fw.nextSeq(ip, ctrlIdx, sf.SubtreeID)
+		if egr == nil {
+			continue
+		}
 
+		bufPtr := egr.PoolGet()
+		buf := *bufPtr
 		n, err := frame.EncodeFragment(
 			buf,
 			sf.SubtreeID, // TxID slot: SubtreeID (reassembly key)
@@ -731,6 +736,7 @@ func (fw *Forwarder) fragmentSubtreeData(targets []Target, raw []byte, sf *frame
 		)
 		if err != nil {
 			fw.log.Error("EncodeFragment subtree data error", "err", err)
+			egr.pool.Put(bufPtr)
 			continue
 		}
 
@@ -738,20 +744,7 @@ func (fw *Forwarder) fragmentSubtreeData(targets []Target, raw []byte, sf *frame
 		// the full V5 header (same pattern as fragmentBlock / BRC-131).
 		buf[7] = raw[7]
 
-		for _, tgt := range targets {
-			addr.Zone = tgt.Iface.Name
-			if _, werr := tgt.Conn.WriteTo(buf[:n], addr); werr != nil {
-				fw.log.Warn("WriteTo subtree data fragment error", "iface", tgt.Iface.Name, "dst", addr, "err", werr)
-				if fw.rec != nil {
-					fw.rec.PacketDropped(tgt.Iface.Name, workerID, "write_error")
-					fw.rec.EgressError(tgt.Iface.Name, workerID)
-				}
-				continue
-			}
-			if fw.rec != nil {
-				fw.rec.ControlFrameForwarded("subtree_data")
-			}
-		}
+		egr.EnqueueControlPooled(buf[:n], addr, "subtree_data", workerID, bufPtr)
 	}
 
 	if fw.debug {
@@ -766,24 +759,19 @@ func (fw *Forwarder) fragmentSubtreeData(targets []Target, raw []byte, sf *frame
 // EgressPort returns the configured UDP destination port for multicast egress.
 func (fw *Forwarder) EgressPort() int { return fw.egressPort }
 
-// ForwardControl sends a raw BRC-127 control datagram (e.g. SubtreeAnnounce)
-// to the given network-service multicast group index on all egress targets.
-// The destination address is derived using [shard.GroupAddr] with the
-// engine's configured scope prefix and IANA group-id.
-// Unlike [Process], no sequence stamping or frame decoding is performed.
-func (fw *Forwarder) ForwardControl(targets []Target, raw []byte, idx shard.GroupIdx, port int) {
+// ForwardControl enqueues a raw BRC-127 control datagram (e.g.
+// SubtreeAnnounce) for the given network-service multicast group index. The
+// destination address is derived using [shard.GroupAddr] with the engine's
+// configured scope prefix and IANA group-id. Unlike [Process], no sequence
+// stamping or frame decoding is performed. raw must remain valid until
+// egr.Flush returns.
+func (fw *Forwarder) ForwardControl(egr *Egress, raw []byte, idx shard.GroupIdx, port int) {
+	if egr == nil {
+		return
+	}
 	dst := shard.GroupAddr(fw.mcPrefix, fw.mcGroupID, idx)
-	addr := &net.UDPAddr{IP: dst, Port: port}
-	for _, tgt := range targets {
-		addr.Zone = tgt.Iface.Name
-		if _, err := tgt.Conn.WriteTo(raw, addr); err != nil {
-			fw.log.Warn("ForwardControl WriteTo error",
-				"iface", tgt.Iface.Name, "dst", addr, "err", err)
-		}
-	}
-	if fw.rec != nil {
-		fw.rec.ControlFrameForwarded(idx.String())
-	}
+	addr := net.UDPAddr{IP: dst, Port: port}
+	egr.EnqueueControl(raw, addr, idx.String(), 0)
 	if fw.debug {
 		fw.log.Debug("control forwarded",
 			"group", idx.String(),
@@ -817,19 +805,33 @@ func stampInPlace(raw []byte, ip [16]byte, groupIdx uint32, subtreeID [32]byte, 
 // nextSeq returns (hashKey, seqNum) for the given (sender IP, group, subtree) flow.
 // hashKey is stable (same for every frame in the flow); seqNum is monotonically
 // incremented per frame.
+//
+// The flow's *flowState is resolved via a striped map keyed by a hash of the
+// sender IP, so concurrent workers handling distinct senders almost never
+// contend on the same stripe mutex. Once the entry exists the seqNum
+// increment is lock-free via atomic.AddUint64.
 func (fw *Forwarder) nextSeq(ip [16]byte, groupIdx uint32, subtreeID [32]byte) (hashKey, seqNum uint64) {
 	key := chainKey{ip: ip, grp: groupIdx, sub: subtreeID}
-	fw.mu.Lock()
-	st, ok := fw.chains[key]
+	stripe := &fw.chains[stripeIndex(ip)]
+	stripe.mu.Lock()
+	st, ok := stripe.m[key]
 	if !ok {
 		st = &flowState{}
-		fw.chains[key] = st
+		stripe.m[key] = st
 	}
-	st.counter++
+	stripe.mu.Unlock()
 	hashKey = seqhash.Hash(ip, groupIdx, subtreeID)
-	seqNum = st.counter
-	fw.mu.Unlock()
+	seqNum = st.counter.Add(1)
 	return hashKey, seqNum
+}
+
+// stripeIndex maps a sender IP to one of chainStripes buckets via FNV-1a
+// over the 16 IP bytes. The mask works because chainStripes is a power of
+// two.
+func stripeIndex(ip [16]byte) uint8 {
+	h := fnv.New32a()
+	_, _ = h.Write(ip[:])
+	return uint8(h.Sum32() & (chainStripes - 1))
 }
 
 // openEgressSocket opens a UDP6 socket with IPV6_MULTICAST_IF set to iface

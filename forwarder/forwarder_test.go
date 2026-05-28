@@ -45,6 +45,17 @@ func makeTargets(t *testing.T, conns ...*net.UDPConn) []Target {
 	return tgts
 }
 
+// makeEgress wraps a set of loopback conns into a real Egress so tests that
+// previously passed []Target can pass *Egress with the same intent. The
+// returned Egress is registered for Flush at test teardown so per-target
+// queueing does not leak across tests.
+func makeEgress(t *testing.T, fw *Forwarder, conns ...*net.UDPConn) *Egress {
+	t.Helper()
+	egr := NewEgress(fw, makeTargets(t, conns...), 8, nil)
+	t.Cleanup(egr.Flush)
+	return egr
+}
+
 func buildV2Frame(t *testing.T, txidByte0 byte, seqNum uint64, payload []byte) []byte {
 	t.Helper()
 	return buildV2FrameSub(t, txidByte0, seqNum, [32]byte{}, payload)
@@ -214,7 +225,7 @@ func TestProcessV2FrameForwardedVerbatim(t *testing.T) {
 	fw := makeForwarder()
 	raw := buildV2Frame(t, 0xAB, 999, nil)
 	// WriteTo to multicast dst will fail on loopback — that's fine, no panic.
-	fw.Process(makeTargets(t, conn), raw, fakeAddr{}, 0)
+	fw.Process(makeEgress(t, fw, conn), raw, fakeAddr{}, 0)
 }
 
 // ── error paths ───────────────────────────────────────────────────────────────
@@ -223,13 +234,13 @@ func TestProcessInvalidFrame(t *testing.T) {
 	fw := makeForwarder()
 	conn, _ := openLoopbackUDP(t)
 	// Truncated buffer — must not panic.
-	fw.Process(makeTargets(t, conn), []byte{0x00, 0x01}, fakeAddr{}, 0)
+	fw.Process(makeEgress(t, fw, conn), []byte{0x00, 0x01}, fakeAddr{}, 0)
 }
 
 func TestProcessBadMagic(t *testing.T) {
 	fw := makeForwarder()
 	conn, _ := openLoopbackUDP(t)
-	fw.Process(makeTargets(t, conn), make([]byte, frame.HeaderSize), fakeAddr{}, 0)
+	fw.Process(makeEgress(t, fw, conn), make([]byte, frame.HeaderSize), fakeAddr{}, 0)
 }
 
 func TestProcessV1FrameForwardedVerbatim(t *testing.T) {
@@ -237,7 +248,7 @@ func TestProcessV1FrameForwardedVerbatim(t *testing.T) {
 	conn, _ := openLoopbackUDP(t)
 	v1 := buildV1Frame(t, 0xAB, nil)
 	// BRC-12 frames are forwarded verbatim; must not panic.
-	fw.Process(makeTargets(t, conn), v1, fakeAddr{}, 0)
+	fw.Process(makeEgress(t, fw, conn), v1, fakeAddr{}, 0)
 }
 
 func TestProcessMultipleTargets(t *testing.T) {
@@ -245,7 +256,7 @@ func TestProcessMultipleTargets(t *testing.T) {
 	conn2, _ := openLoopbackUDP(t)
 	fw := makeForwarder()
 	raw := buildV2Frame(t, 0xAB, 1, nil)
-	fw.Process(makeTargets(t, conn1, conn2), raw, fakeAddr{}, 0)
+	fw.Process(makeEgress(t, fw, conn1, conn2), raw, fakeAddr{}, 0)
 }
 
 func TestProcessDebugMode(t *testing.T) {
@@ -253,7 +264,7 @@ func TestProcessDebugMode(t *testing.T) {
 	fw := New(engine, 0xFF05, shard.DefaultGroupID, 9001, true, nil)
 	raw := buildV2Frame(t, 0xAB, 1, nil)
 	conn, _ := openLoopbackUDP(t)
-	fw.Process(makeTargets(t, conn), raw, fakeAddr{}, 0)
+	fw.Process(makeEgress(t, fw, conn), raw, fakeAddr{}, 0)
 }
 
 // ── OpenTargets / CloseTargets ────────────────────────────────────────────────

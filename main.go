@@ -175,6 +175,7 @@ func main() {
 
 	for i := range cfg.NumWorkers {
 		w := worker.New(i, fwd, ifaces, rec)
+		w.SetRecvBatch(cfg.RecvBatch)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

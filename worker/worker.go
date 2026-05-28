@@ -6,7 +6,10 @@
 // Each Worker owns a single ingress UDP socket bound via SO_REUSEPORT. The
 // kernel distributes incoming datagrams across worker sockets with no
 // userspace coordination on the receive path. Per-packet decode, sequence
-// stamping, and egress forwarding are delegated to [forwarder.Forwarder].
+// stamping, and egress queueing are delegated to [forwarder.Forwarder]; the
+// worker holds a per-goroutine [forwarder.Egress] that the forwarder appends
+// to for every processed frame and that the worker flushes once per receive
+// batch.
 //
 // # SO_REUSEPORT
 //
@@ -15,6 +18,17 @@
 // to select which socket — and therefore which worker goroutine — receives
 // each packet. This provides CPU-local receive processing with no shared
 // data structures on the ingress path.
+//
+// # recvmmsg batching
+//
+// The receive loop uses [ipv6.PacketConn.ReadBatch], which maps to a single
+// recvmmsg(2) syscall on Linux and falls back to a per-packet ReadFrom loop
+// on other platforms. Each worker pre-allocates batchSize datagram buffers
+// and reuses them across iterations; per packet the worker decodes, hands
+// the raw slice to forwarder.Process*, and at the end of the batch calls
+// Egress.Flush which dispatches one WriteBatch (sendmmsg on Linux) per
+// configured egress interface. Buffer reuse is safe because Egress.Flush
+// completes before the next ReadBatch overwrites the same buffers.
 package worker
 
 import (
@@ -25,6 +39,7 @@ import (
 	"os"
 	"syscall"
 
+	"golang.org/x/net/ipv6"
 	"golang.org/x/sys/unix"
 
 	"github.com/lightwebinc/shard-common/frame"
@@ -41,16 +56,22 @@ const (
 	// socketBufBytes is the value requested for SO_RCVBUF.
 	// Larger buffers absorb short-lived bursts without dropping datagrams.
 	socketBufBytes = 4 * 1024 * 1024 // 4 MiB
+
+	// DefaultRecvBatch is the fallback batch size used when New is called
+	// without an explicit value (legacy callers). main passes the
+	// configured value through.
+	DefaultRecvBatch = 32
 )
 
 // Worker owns one SO_REUSEPORT ingress socket and delegates forwarding to a
 // shared [forwarder.Forwarder]. Create with [New] and start with [Run].
 type Worker struct {
-	id     int
-	fwd    *forwarder.Forwarder
-	ifaces []*net.Interface
-	rec    *metrics.Recorder
-	log    *slog.Logger
+	id        int
+	fwd       *forwarder.Forwarder
+	ifaces    []*net.Interface
+	rec       *metrics.Recorder
+	log       *slog.Logger
+	recvBatch int
 }
 
 // New constructs a Worker. No sockets are opened until [Run] is called.
@@ -59,14 +80,28 @@ type Worker struct {
 //   - fwd is the shared forwarder; handles decode, sequence, and egress.
 //   - ifaces is the list of NICs passed to [forwarder.Forwarder.OpenTargets].
 //   - rec is the shared metrics recorder; may be nil to disable metrics.
+//
+// The receive batch size defaults to [DefaultRecvBatch]; override via
+// [Worker.SetRecvBatch] before calling [Run].
 func New(id int, fwd *forwarder.Forwarder, ifaces []*net.Interface, rec *metrics.Recorder) *Worker {
 	return &Worker{
-		id:     id,
-		fwd:    fwd,
-		ifaces: ifaces,
-		rec:    rec,
-		log:    slog.Default().With("worker", id),
+		id:        id,
+		fwd:       fwd,
+		ifaces:    ifaces,
+		rec:       rec,
+		log:       slog.Default().With("worker", id),
+		recvBatch: DefaultRecvBatch,
 	}
+}
+
+// SetRecvBatch overrides the per-worker recvmmsg batch size. Values < 1 are
+// clamped to 1 (per-packet receive, equivalent to the legacy pre-batched
+// path). Call before [Run]; not safe to change while the worker is running.
+func (w *Worker) SetRecvBatch(n int) {
+	if n < 1 {
+		n = 1
+	}
+	w.recvBatch = n
 }
 
 // Run opens the ingress socket, opens egress targets via the forwarder, then
@@ -138,50 +173,84 @@ func (w *Worker) Run(listenAddr string, listenPort int, done <-chan struct{}) er
 	for i, tgt := range targets {
 		ifaceNames[i] = tgt.Iface.Name
 	}
-	w.log.Info("ready", "listen_port", listenPort, "egress_ifaces", ifaceNames)
+	w.log.Info("ready",
+		"listen_port", listenPort,
+		"egress_ifaces", ifaceNames,
+		"recv_batch", w.recvBatch,
+	)
 	if w.rec != nil {
 		w.rec.WorkerReady()
 		defer w.rec.WorkerDone()
 	}
 
-	// Allocate per-worker receive buffer.
-	buf := make([]byte, RecvBufSize)
+	// Per-worker outbound queue. Flushed once per receive batch; a deferred
+	// flush drains any in-flight datagrams on graceful shutdown so the
+	// last batch's egress is not lost.
+	egr := forwarder.NewEgress(w.fwd, targets, w.recvBatch, w.rec)
+	defer egr.Flush()
+
+	// Wrap the ingress PacketConn so we can use ReadBatch (recvmmsg on
+	// Linux; per-packet fallback elsewhere).
+	pc := ipv6.NewPacketConn(conn)
+
+	// Pre-allocate batchSize receive slots. Each slot owns a single
+	// RecvBufSize byte buffer that is reused across iterations; we always
+	// flush the per-batch Egress before the next ReadBatch overwrites
+	// these buffers, so it is safe for the forwarder to retain raw slices
+	// across the dispatch loop within a single batch.
+	msgs := make([]ipv6.Message, w.recvBatch)
+	for i := range msgs {
+		msgs[i] = ipv6.Message{Buffers: [][]byte{make([]byte, RecvBufSize)}}
+	}
+	ifaceName := ""
+	if len(targets) > 0 {
+		ifaceName = targets[0].Iface.Name
+	}
 
 	for {
-		n, src, err := conn.ReadFrom(buf)
+		nMsgs, err := pc.ReadBatch(msgs, 0)
 		if err != nil {
 			if isClosedErr(err) {
 				return nil
 			}
-			w.log.Warn("ReadFrom error", "err", err)
+			w.log.Warn("ReadBatch error", "err", err)
 			if w.rec != nil && len(targets) > 0 {
-				w.rec.IngressError(targets[0].Iface.Name, w.id)
+				w.rec.IngressError(ifaceName, w.id)
 			}
 			continue
 		}
 
-		if n == RecvBufSize {
-			w.log.Warn("datagram fills recv buffer; may be truncated",
-				"src", src, "len", n)
-			if w.rec != nil && len(targets) > 0 {
-				w.rec.PacketDropped(targets[0].Iface.Name, w.id, "truncated")
+		for i := 0; i < nMsgs; i++ {
+			m := &msgs[i]
+			n := m.N
+			src := m.Addr
+			buf := m.Buffers[0]
+
+			if n == RecvBufSize {
+				w.log.Warn("datagram fills recv buffer; may be truncated",
+					"src", src, "len", n)
+				if w.rec != nil && len(targets) > 0 {
+					w.rec.PacketDropped(ifaceName, w.id, "truncated")
+				}
+				continue
 			}
-			continue
+
+			if w.rec != nil && len(targets) > 0 {
+				w.rec.PacketReceived(ifaceName, w.id, n)
+			}
+			switch {
+			case n > 6 && buf[6] == frame.FrameVerV4:
+				w.fwd.ProcessBlock(egr, buf[:n], src, w.id)
+			case n > 6 && buf[6] == frame.FrameVerV5:
+				w.fwd.ProcessSubtreeData(egr, buf[:n], src, w.id)
+			case n > 6 && buf[6] == frame.FrameVerV6:
+				w.fwd.ProcessAnchor(egr, buf[:n], src, w.id)
+			default:
+				w.fwd.Process(egr, buf[:n], src, w.id)
+			}
 		}
 
-		if w.rec != nil && len(targets) > 0 {
-			w.rec.PacketReceived(targets[0].Iface.Name, w.id, n)
-		}
-		switch {
-		case n > 6 && buf[6] == frame.FrameVerV4:
-			w.fwd.ProcessBlock(targets, buf[:n], src, w.id)
-		case n > 6 && buf[6] == frame.FrameVerV5:
-			w.fwd.ProcessSubtreeData(targets, buf[:n], src, w.id)
-		case n > 6 && buf[6] == frame.FrameVerV6:
-			w.fwd.ProcessAnchor(targets, buf[:n], src, w.id)
-		default:
-			w.fwd.Process(targets, buf[:n], src, w.id)
-		}
+		egr.Flush()
 	}
 }
 
