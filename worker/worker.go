@@ -53,9 +53,11 @@ const (
 	// UDP should stay well below the path MTU to avoid IP fragmentation.
 	RecvBufSize = 65536
 
-	// socketBufBytes is the value requested for SO_RCVBUF.
-	// Larger buffers absorb short-lived bursts without dropping datagrams.
-	socketBufBytes = 4 * 1024 * 1024 // 4 MiB
+	// DefaultRecvBufBytes is the value requested for SO_RCVBUF when the
+	// caller does not override it via [Worker.SetRecvBufBytes]. Larger
+	// buffers absorb short-lived bursts without dropping datagrams; the
+	// kernel clamps the request to net.core.rmem_max.
+	DefaultRecvBufBytes = 4 * 1024 * 1024 // 4 MiB
 
 	// DefaultRecvBatch is the fallback batch size used when New is called
 	// without an explicit value (legacy callers). main passes the
@@ -66,12 +68,13 @@ const (
 // Worker owns one SO_REUSEPORT ingress socket and delegates forwarding to a
 // shared [forwarder.Forwarder]. Create with [New] and start with [Run].
 type Worker struct {
-	id        int
-	fwd       *forwarder.Forwarder
-	ifaces    []*net.Interface
-	rec       *metrics.Recorder
-	log       *slog.Logger
-	recvBatch int
+	id           int
+	fwd          *forwarder.Forwarder
+	ifaces       []*net.Interface
+	rec          *metrics.Recorder
+	log          *slog.Logger
+	recvBatch    int
+	recvBufBytes int
 }
 
 // New constructs a Worker. No sockets are opened until [Run] is called.
@@ -85,12 +88,13 @@ type Worker struct {
 // [Worker.SetRecvBatch] before calling [Run].
 func New(id int, fwd *forwarder.Forwarder, ifaces []*net.Interface, rec *metrics.Recorder) *Worker {
 	return &Worker{
-		id:        id,
-		fwd:       fwd,
-		ifaces:    ifaces,
-		rec:       rec,
-		log:       slog.Default().With("worker", id),
-		recvBatch: DefaultRecvBatch,
+		id:           id,
+		fwd:          fwd,
+		ifaces:       ifaces,
+		rec:          rec,
+		log:          slog.Default().With("worker", id),
+		recvBatch:    DefaultRecvBatch,
+		recvBufBytes: DefaultRecvBufBytes,
 	}
 }
 
@@ -102,6 +106,15 @@ func (w *Worker) SetRecvBatch(n int) {
 		n = 1
 	}
 	w.recvBatch = n
+}
+
+// SetRecvBufBytes overrides the requested SO_RCVBUF size. Values < 1 leave
+// the default ([DefaultRecvBufBytes]) in place. Call before [Run].
+func (w *Worker) SetRecvBufBytes(n int) {
+	if n < 1 {
+		return
+	}
+	w.recvBufBytes = n
 }
 
 // Run opens the ingress socket, opens egress targets via the forwarder, then
@@ -127,11 +140,11 @@ func (w *Worker) Run(listenAddr string, listenPort int, done <-chan struct{}) er
 	}
 
 	// Enlarge the receive buffer to absorb bursts of transaction datagrams.
-	if err := unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUF, socketBufBytes); err != nil {
+	if err := unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUF, w.recvBufBytes); err != nil {
 		w.log.Warn("could not set SO_RCVBUF", "err", err)
 	}
 	if actual, err := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUF); err == nil {
-		w.log.Debug("SO_RCVBUF", "requested_bytes", socketBufBytes, "actual_bytes", actual)
+		w.log.Debug("SO_RCVBUF", "requested_bytes", w.recvBufBytes, "actual_bytes", actual)
 	}
 
 	sa := &unix.SockaddrInet6{Port: listenPort}
