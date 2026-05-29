@@ -13,13 +13,13 @@ package main
 import (
 	"bufio"
 	"context"
-	"crypto/rand"
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"math"
-	"math/big"
+	mrand "math/rand/v2"
 	"net"
 	"net/http"
 	"os"
@@ -421,6 +421,20 @@ type sendResult struct {
 	Mbps       float64
 }
 
+// fillRand fills b with non-cryptographic random bytes from math/rand/v2.
+// Uses 8-byte writes from Uint64 to amortise the per-call cost.
+func fillRand(b []byte) {
+	i := 0
+	for ; i+8 <= len(b); i += 8 {
+		binary.LittleEndian.PutUint64(b[i:i+8], mrand.Uint64())
+	}
+	if i < len(b) {
+		var tail [8]byte
+		binary.LittleEndian.PutUint64(tail[:], mrand.Uint64())
+		copy(b[i:], tail[:len(b)-i])
+	}
+}
+
 func sendFramesWorker(ctx context.Context, cfg *config, workerID int, targetPPS int) *sendResult {
 	conn, err := net.Dial("udp6", cfg.ProxyAddr)
 	if err != nil {
@@ -469,25 +483,20 @@ func sendFramesWorker(ctx context.Context, cfg *config, workerID int, targetPPS 
 			continue
 		}
 
-		// Generate random txid.
-		if _, err := rand.Read(f.TxID[:]); err != nil {
-			log.Printf("rand read: %v", err)
-			continue
-		}
+		// Generate random txid. Non-cryptographic PRNG is fine here:
+		// frames are throwaway load and the proxy only needs the txid
+		// for routing/dedup, not adversarial uniqueness.
+		fillRand(f.TxID[:])
 
 		// Generate random payload size in [PayloadMin, PayloadMax].
 		payloadSize := cfg.PayloadMin
 		if payloadRange > 1 {
-			n, _ := rand.Int(rand.Reader, big.NewInt(int64(payloadRange)))
-			payloadSize += int(n.Int64())
+			payloadSize += mrand.IntN(payloadRange)
 		}
 
 		// Fill payload with random bytes.
 		f.Payload = buf[frame.HeaderSize : frame.HeaderSize+payloadSize]
-		if _, err := rand.Read(f.Payload); err != nil {
-			log.Printf("rand payload: %v", err)
-			continue
-		}
+		fillRand(f.Payload)
 
 		n, err := frame.Encode(f, buf)
 		if err != nil {
