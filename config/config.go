@@ -38,6 +38,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/lightwebinc/shard-common/shard"
 )
 
 // Scopes maps a human-readable scope name to the two-byte big-endian IPv6
@@ -65,11 +67,13 @@ type Config struct {
 	EgressPort    int      // Destination UDP port written into outgoing multicast datagrams
 
 	// Sharding
-	ShardBits uint   // Number of txid prefix bits used as the group key (1–15)
-	NumGroups uint32 // Derived: 1 << ShardBits — total distinct multicast groups
-	MCScope   string // Human name; one of the keys in Scopes
-	MCPrefix  uint16 // Derived from MCScope — upper 16 bits of the IPv6 group address
-	MCGroupID uint16 // IANA group-id occupying bytes 12–13 (default 0x000B)
+	ShardBits  uint   // Number of txid prefix bits used as the group key (1–15)
+	NumGroups  uint32 // Derived: 1 << ShardBits — total distinct multicast groups
+	MCScope    string // "site" | "global" — see shard.Scope. Legacy values "link"/"org" are still accepted in ASM mode.
+	MCPrefix   uint16 // Derived from (SourceMode, MCScope) — upper 16 bits of the IPv6 group address
+	MCGroupID  uint16 // IANA group-id occupying bytes 12–13 (default 0x000B)
+	SourceMode string // "asm" (default) | "ssm" — selects ASM (FF0x) vs SSM (FF3x) addressing per RFC 4607
+	BindSource string // Optional IPv6 literal; when SSM is enabled each proxy replica MUST bind a distinct source IPv6 so receivers can pre-declare it in (S,G) joins
 
 	// Runtime
 	NumWorkers   int           // Worker goroutine count; defaults to runtime.NumCPU()
@@ -140,7 +144,11 @@ func Load() (*Config, error) {
 	flag.IntVar(&c.NumWorkers, "workers", envInt("NUM_WORKERS", runtime.NumCPU()),
 		"number of worker goroutines (0 = runtime.NumCPU)")
 	flag.StringVar(&c.MCScope, "scope", envStr("MC_SCOPE", "site"),
-		"multicast scope: link | site | org | global")
+		"multicast scope: link | site | org | global (site|global also accepted in SSM mode)")
+	flag.StringVar(&c.SourceMode, "source-mode", envStr("SOURCE_MODE", "asm"),
+		"multicast addressing model: asm | ssm (SSM uses FF3x::/32 per RFC 4607; requires PIM-SSM in fabric)")
+	flag.StringVar(&c.BindSource, "bind-source", envStr("BIND_SOURCE", ""),
+		"optional IPv6 literal to bind for multicast egress (required and MUST be unique per replica when source-mode=ssm)")
 	groupIDFlag := flag.String("mc-group-id", envStr("MC_GROUP_ID", "0x000B"),
 		"IANA group-id (bytes 12–13 of the IPv6 multicast address); default 0x000B (IANA Bitcoin)")
 	flag.BoolVar(&c.Debug, "debug", envBool("DEBUG", false),
@@ -187,12 +195,40 @@ func Load() (*Config, error) {
 	c.NumGroups = 1 << c.ShardBits
 	c.OTLPInterval = *otlpInterval
 
-	// Resolve multicast scope.
-	prefix, ok := Scopes[c.MCScope]
-	if !ok {
-		return nil, fmt.Errorf("unknown scope %q; valid values: link, site, org, global", c.MCScope)
+	// Resolve multicast scope + source-mode → upper-16-bit prefix.
+	//
+	// SSM uses the shared shard.Prefix() helper, which enforces RFC 8815
+	// (no inter-domain ASM) and yields FF35 / FF3E for SSM. ASM at the
+	// legacy "link"/"org" scopes is preserved via the Scopes map.
+	switch strings.ToLower(c.SourceMode) {
+	case "asm":
+		c.SourceMode = "asm"
+		prefix, ok := Scopes[c.MCScope]
+		if !ok {
+			return nil, fmt.Errorf("unknown scope %q; valid values: link, site, org, global", c.MCScope)
+		}
+		c.MCPrefix = prefix
+	case "ssm":
+		c.SourceMode = "ssm"
+		scope, err := shard.ParseScope(c.MCScope)
+		if err != nil {
+			return nil, fmt.Errorf("source-mode=ssm requires -scope site|global: %w", err)
+		}
+		prefix, err := shard.Prefix(shard.SourceModeSSM, scope)
+		if err != nil {
+			return nil, err
+		}
+		c.MCPrefix = prefix
+		if c.BindSource == "" {
+			return nil, fmt.Errorf("source-mode=ssm requires -bind-source (distinct IPv6 per replica)")
+		}
+		ip := net.ParseIP(c.BindSource)
+		if ip == nil || ip.To4() != nil {
+			return nil, fmt.Errorf("invalid -bind-source %q: must be an IPv6 literal", c.BindSource)
+		}
+	default:
+		return nil, fmt.Errorf("invalid source-mode %q (asm|ssm)", c.SourceMode)
 	}
-	c.MCPrefix = prefix
 
 	// Parse IANA group-id (default 0x000B = IANA Bitcoin allocation).
 	gid, err := parseGroupID(*groupIDFlag)

@@ -347,3 +347,74 @@ func TestLoadDrainTimeoutFlag(t *testing.T) {
 		t.Errorf("DrainTimeout = %v, want 15s", cfg.DrainTimeout)
 	}
 }
+
+func TestLoadSourceModeDefault(t *testing.T) {
+	iface := realIface(t)
+	cfg, err := parseArgs(t, []string{"-iface", iface})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.SourceMode != "asm" {
+		t.Errorf("SourceMode default = %q, want %q", cfg.SourceMode, "asm")
+	}
+	if cfg.MCPrefix != 0xFF05 {
+		t.Errorf("MCPrefix default = %#x, want 0xFF05", cfg.MCPrefix)
+	}
+	if cfg.BindSource != "" {
+		t.Errorf("BindSource default = %q, want empty", cfg.BindSource)
+	}
+}
+
+func TestLoadSSMRequiresBindSource(t *testing.T) {
+	iface := realIface(t)
+	_, err := parseArgs(t, []string{"-iface", iface, "-source-mode", "ssm", "-scope", "site"})
+	if err == nil {
+		t.Fatal("Load(ssm without bind-source) = nil, want error")
+	}
+}
+
+func TestLoadSSMSiteScope(t *testing.T) {
+	iface := realIface(t)
+	cfg, err := parseArgs(t, []string{"-iface", iface, "-source-mode", "ssm", "-scope", "site", "-bind-source", "fd20::1"})
+	if err != nil {
+		t.Fatalf("Load(ssm,site): %v", err)
+	}
+	if cfg.MCPrefix != 0xFF35 {
+		t.Errorf("SSM/site MCPrefix = %#x, want 0xFF35", cfg.MCPrefix)
+	}
+}
+
+func TestLoadSSMGlobalScope(t *testing.T) {
+	iface := realIface(t)
+	cfg, err := parseArgs(t, []string{"-iface", iface, "-source-mode", "ssm", "-scope", "global", "-bind-source", "fd20::1"})
+	if err != nil {
+		t.Fatalf("Load(ssm,global): %v", err)
+	}
+	if cfg.MCPrefix != 0xFF3E {
+		t.Errorf("SSM/global MCPrefix = %#x, want 0xFF3E", cfg.MCPrefix)
+	}
+}
+
+func TestLoadSSMRejectsLinkScope(t *testing.T) {
+	iface := realIface(t)
+	_, err := parseArgs(t, []string{"-iface", iface, "-source-mode", "ssm", "-scope", "link", "-bind-source", "fd20::1"})
+	if err == nil {
+		t.Fatal("Load(ssm,link) = nil, want error (only site|global valid in SSM)")
+	}
+}
+
+func TestLoadSSMRejectsIPv4BindSource(t *testing.T) {
+	iface := realIface(t)
+	_, err := parseArgs(t, []string{"-iface", iface, "-source-mode", "ssm", "-scope", "site", "-bind-source", "10.0.0.1"})
+	if err == nil {
+		t.Fatal("Load(ssm with IPv4 bind-source) = nil, want error")
+	}
+}
+
+func TestLoadRejectsUnknownSourceMode(t *testing.T) {
+	iface := realIface(t)
+	_, err := parseArgs(t, []string{"-iface", iface, "-source-mode", "any"})
+	if err == nil {
+		t.Fatal("Load with -source-mode=any returned nil, want error")
+	}
+}

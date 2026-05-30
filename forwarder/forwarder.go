@@ -122,7 +122,8 @@ type Forwarder struct {
 	debug        bool
 	rec          *metrics.Recorder
 	log          *slog.Logger
-	fragDataSize int // >0 = fragmentation enabled; fragment capacity per datagram
+	fragDataSize int    // >0 = fragmentation enabled; fragment capacity per datagram
+	bindSource   net.IP // optional; when non-nil egress sockets are syscall.Bind'd to this IPv6 so SSM receivers can pre-declare it
 
 	// Ingress TxID dedup (nil = disabled). When non-nil, every BRC-124/128,
 	// BRC-131 block, BRC-132 subtree data, and BRC-134 anchor frame claims
@@ -138,6 +139,18 @@ type Forwarder struct {
 	// entry exists the counter is incremented lock-free via atomic.Uint64;
 	// the stripe lock guards only the map lookup/insert path.
 	chains [chainStripes]chainStripe
+}
+
+// SetBindSource configures the source IPv6 the kernel will bind for
+// every multicast egress socket. Required when source-mode=ssm so SSM
+// receivers can pre-declare this proxy in their (S,G) join calls. Each
+// proxy replica MUST use a distinct bindSource — anycast / shared
+// source IPs break PIM-SSM RPF.
+//
+// ip must be a valid IPv6 address (To4() == nil). Pass nil to clear.
+// Must be called before [OpenTargets].
+func (fw *Forwarder) SetBindSource(ip net.IP) {
+	fw.bindSource = ip
 }
 
 // SetTxidDedup attaches a TxID claim store used to suppress ingress
@@ -208,7 +221,7 @@ func (fw *Forwarder) OpenTargets(ifaces []*net.Interface, probeWorker bool) ([]T
 	}
 	targets := make([]Target, 0, len(ifaces))
 	for _, iface := range ifaces {
-		conn, err := openEgressSocket(iface, loopback)
+		conn, err := openEgressSocket(iface, loopback, fw.bindSource)
 		if err != nil {
 			closeTargets(targets, fw.log)
 			return nil, fmt.Errorf("forwarder: open egress socket (%s): %w", iface.Name, err)
@@ -836,10 +849,19 @@ func stripeIndex(ip [16]byte) uint8 {
 
 // openEgressSocket opens a UDP6 socket with IPV6_MULTICAST_IF set to iface
 // and IPV6_MULTICAST_LOOP set to loopback (1 for debug, 0 otherwise).
-func openEgressSocket(iface *net.Interface, loopback int) (*net.UDPConn, error) {
-	conn, err := net.ListenPacket("udp6", "[::]:0")
+//
+// When bindSource is non-nil the socket is bound to that IPv6 (instead of
+// the wildcard "::"), so the kernel emits multicast egress with that
+// specific source IPv6. Required when source-mode=ssm so SSM receivers
+// can pre-declare this proxy in their (S,G) join calls.
+func openEgressSocket(iface *net.Interface, loopback int, bindSource net.IP) (*net.UDPConn, error) {
+	listenAddr := "[::]:0"
+	if bindSource != nil {
+		listenAddr = "[" + bindSource.String() + "]:0"
+	}
+	conn, err := net.ListenPacket("udp6", listenAddr)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("listen on %s: %w", listenAddr, err)
 	}
 	udpConn := conn.(*net.UDPConn)
 

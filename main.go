@@ -141,6 +141,18 @@ func main() {
 		fwd.SetFragMTU(cfg.FragMTU)
 		slog.Info("BRC-130 fragmentation enabled", "frag_mtu", cfg.FragMTU)
 	}
+	if cfg.BindSource != "" {
+		ip := net.ParseIP(cfg.BindSource)
+		// Config-time validation already ensured IPv6 when SSM; this is
+		// belt-and-suspenders for ASM operators who supply a bindSource
+		// without enabling SSM.
+		if ip == nil || ip.To4() != nil {
+			slog.Error("invalid bind-source (must be IPv6)", "value", cfg.BindSource)
+			os.Exit(1)
+		}
+		fwd.SetBindSource(ip)
+		slog.Info("multicast egress source bound", "bind_source", ip.String(), "source_mode", cfg.SourceMode)
+	}
 
 	// Optional ingress TxID dedup. Two-tier (local LRU → Redis SETNX).
 	// LocalCap=0 disables the feature entirely.
