@@ -24,6 +24,7 @@ as fallbacks; hard-coded defaults apply when neither is present.
 | `-otlp-interval` | `OTLP_INTERVAL` | `30s` | OTLP push interval |  |  |  |
 | `-frag-mtu` | `FRAG_MTU` | `0` | Path MTU for BRC-130 fragmentation (0 = disabled) |  |  |  |
 | `-recv-batch` | `BSP_RECV_BATCH` | `32` | Datagrams per `recvmmsg` syscall (1 = per-packet legacy path) |  |  |  |
+| `-recv-buf-bytes` | `BSP_RECV_BUF_BYTES` | `0` | Per-worker `SO_RCVBUF` in bytes (`0` = system default; capped by `net.core.rmem_max`) |  |  |  |
 
 ---
 
