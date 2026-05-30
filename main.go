@@ -186,8 +186,13 @@ func main() {
 		}()
 	}
 
-	// Start TCP ingress if configured.
+	// Start TCP ingress if configured. Mark it as a /readyz prerequisite
+	// before launching the goroutine so /readyz returns 503 until the
+	// listener has actually bound — otherwise senders can race the bind
+	// (TCP_LISTEN_PORT > 0 ⇒ readyz must reflect TCP reachability, not
+	// just worker count).
 	if cfg.TCPListenPort > 0 {
+		rec.RequireTCPIngress()
 		tcpIngress := worker.NewTCPIngress(fwd, ifaces, rec)
 		wg.Add(1)
 		go func() {

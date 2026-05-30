@@ -120,6 +120,12 @@ type Recorder struct {
 	// While true, /readyz returns 503 regardless of worker count.
 	draining atomic.Bool
 
+	// tcpIngressRequired is set true when TCP_LISTEN_PORT > 0; /readyz then
+	// also gates on tcpIngressReady, which TCPIngress.Run flips after a
+	// successful net.Listen. Prevents senders from racing the listener bind.
+	tcpIngressRequired atomic.Bool
+	tcpIngressReady    atomic.Bool
+
 	// Composed shutdown function (OTLP exporter + MeterProvider)
 	shutdownFn func(context.Context) error
 }
@@ -478,6 +484,19 @@ func (r *Recorder) SetDraining() {
 	r.draining.Store(true)
 }
 
+// RequireTCPIngress marks the TCP ingress listener as a /readyz prerequisite.
+// Call before starting TCPIngress.Run so /readyz returns 503 until the
+// listener has bound (signalled via TCPIngressReady).
+func (r *Recorder) RequireTCPIngress() {
+	r.tcpIngressRequired.Store(true)
+}
+
+// TCPIngressReady signals that the TCP ingress listener has bound and is
+// accepting connections. Call once from TCPIngress.Run after net.Listen.
+func (r *Recorder) TCPIngressReady() {
+	r.tcpIngressReady.Store(true)
+}
+
 // Shutdown flushes all pending OTLP exports and releases SDK resources.
 // Call once during graceful shutdown before wg.Wait().
 func (r *Recorder) Shutdown(ctx context.Context) {
@@ -569,17 +588,19 @@ func (r *Recorder) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 func (r *Recorder) handleReadyz(w http.ResponseWriter, _ *http.Request) {
 	ready := int(r.readyCount.Load())
 	total := r.numWorkers
+	tcpReq := r.tcpIngressRequired.Load()
+	tcpRdy := r.tcpIngressReady.Load()
 	w.Header().Set("Content-Type", "application/json")
 	if r.draining.Load() {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = fmt.Fprintf(w, `{"status":"draining","workers_ready":%d,"workers_total":%d}`, ready, total)
+		_, _ = fmt.Fprintf(w, `{"status":"draining","workers_ready":%d,"workers_total":%d,"tcp_ingress_required":%t,"tcp_ingress_ready":%t}`, ready, total, tcpReq, tcpRdy)
 		return
 	}
-	if ready >= total && total > 0 {
+	if ready >= total && total > 0 && (!tcpReq || tcpRdy) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{"status":"ready","workers_ready":%d,"workers_total":%d}`, ready, total)
+		_, _ = fmt.Fprintf(w, `{"status":"ready","workers_ready":%d,"workers_total":%d,"tcp_ingress_required":%t,"tcp_ingress_ready":%t}`, ready, total, tcpReq, tcpRdy)
 		return
 	}
 	w.WriteHeader(http.StatusServiceUnavailable)
-	_, _ = fmt.Fprintf(w, `{"status":"starting","workers_ready":%d,"workers_total":%d}`, ready, total)
+	_, _ = fmt.Fprintf(w, `{"status":"starting","workers_ready":%d,"workers_total":%d,"tcp_ingress_required":%t,"tcp_ingress_ready":%t}`, ready, total, tcpReq, tcpRdy)
 }

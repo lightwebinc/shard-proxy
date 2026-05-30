@@ -230,6 +230,45 @@ func TestHandleReadyzReady(t *testing.T) {
 	}
 }
 
+func TestHandleReadyzTCPIngressGate(t *testing.T) {
+	rec := newTestRecorder(t, 1)
+	rec.WorkerReady()
+	rec.RequireTCPIngress()
+
+	// Workers ready but TCP listener not yet bound → 503 starting.
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	w := httptest.NewRecorder()
+	rec.handleReadyz(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("pre-bind status = %d, want %d", w.Code, http.StatusServiceUnavailable)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("pre-bind body not valid JSON: %v", err)
+	}
+	if body["status"] != "starting" {
+		t.Errorf("pre-bind status field = %v, want starting", body["status"])
+	}
+	if body["tcp_ingress_required"] != true || body["tcp_ingress_ready"] != false {
+		t.Errorf("pre-bind tcp flags = req:%v ready:%v, want req:true ready:false",
+			body["tcp_ingress_required"], body["tcp_ingress_ready"])
+	}
+
+	// Once listener bound → 200 ready.
+	rec.TCPIngressReady()
+	w = httptest.NewRecorder()
+	rec.handleReadyz(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("post-bind status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("post-bind body not valid JSON: %v", err)
+	}
+	if body["status"] != "ready" {
+		t.Errorf("post-bind status field = %v, want ready", body["status"])
+	}
+}
+
 // ── Serve (integration) ───────────────────────────────────────────────────────
 
 func TestServeMetricsEndpoint(t *testing.T) {

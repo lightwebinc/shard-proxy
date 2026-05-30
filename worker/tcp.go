@@ -69,6 +69,9 @@ func (ti *TCPIngress) Run(listenAddr string, listenPort int, done <-chan struct{
 		_ = ln.Close()
 	}()
 
+	if ti.rec != nil {
+		ti.rec.TCPIngressReady()
+	}
 	ti.log.Info("TCP ingress ready", "addr", ln.Addr())
 
 	// Open a set of egress targets shared by all connections on this goroutine.
