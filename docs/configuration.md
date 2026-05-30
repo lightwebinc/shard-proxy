@@ -15,6 +15,8 @@ as fallbacks; hard-coded defaults apply when neither is present.
 | `-shard-bits` | `SHARD_BITS` | `2` | Key bit width (1–15) |  |  |  |
 | `-scope` | `MC_SCOPE` | `site` | Multicast scope: `link` \ | `site` \ | `org` \ | `global` |
 | `-mc-group-id` | `MC_GROUP_ID` | `0x000B` | IANA group-id (bytes 12–13); default = IANA Bitcoin allocation `FF0X::B` |  |  |  |
+| `-source-mode` | `SOURCE_MODE` | `asm` | Multicast addressing model: `asm` (FF0x; default) or `ssm` (FF3x per RFC 4607). SSM derives the prefix via `shard.Prefix(SSM, scope)` → FF35 site / FF3E global; RFC 8815 deprecates ASM at global scope and is rejected. Requires PIM-SSM in the fabric. See [SSM Support Plan](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/SourceSpecificMulticast/ssm-support-plan.md). |  |  |  |
+| `-bind-source` | `BIND_SOURCE` | `""` | IPv6 literal bound on every multicast egress socket via `syscall.Bind` in `openEgressSocket`. **Required when `-source-mode=ssm`** and MUST be distinct per replica — anycast/ECMP-shared sources break PIM-SSM RPF. For single-identity deployments use VRRP active-standby. |  |  |  |
 | `-workers` | `NUM_WORKERS` | `runtime.NumCPU()` | Worker goroutine count (0 = NumCPU) |  |  |  |
 | `-debug` | `DEBUG` | `false` | Enable per-packet debug logging and multicast loopback |  |  |  |
 | `-drain-timeout` | `DRAIN_TIMEOUT` | `0s` | Pre-drain delay before closing sockets; `/readyz` returns 503 during this window (`0s` = disabled) |  |  |  |

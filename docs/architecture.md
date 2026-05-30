@@ -33,6 +33,22 @@ Using top bits rather than modulo gives consistent-hashing: when `shardBits`
 increases by 1, every existing group splits into exactly two child groups.
 Subscribers join additional groups; existing subscriptions remain valid.
 
+The scope nibble `X` is derived from `(source-mode, scope)` via
+`shard.Prefix()`:
+
+| Mode | Site scope (intra-domain) | Global scope (inter-domain) |
+| ---- | ------------------------- | --------------------------- |
+| ASM  | `FF05::B:idx` (default)   | rejected (RFC 8815)         |
+| SSM  | `FF35::B:idx`             | `FF3E::B:idx`               |
+
+`-source-mode=ssm` switches every data-plane group to the `FF3x::/32`
+range (RFC 4607). The egress socket is bound to `-bind-source`
+(a distinct IPv6 per replica) so SSM receivers can pre-declare this
+proxy in their `(S,G)` join calls — anycast / ECMP-shared sources
+break PIM-SSM RPF. See the
+[SSM Support Plan](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/SourceSpecificMulticast/ssm-support-plan.md)
+for fabric prerequisites (PIM-SSM, MLDv2, raised `mld_max_msf`).
+
 ## Control Groups
 
 BRC-131 and BRC-132 frames are routed to fixed control-plane multicast groups rather than

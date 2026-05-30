@@ -69,6 +69,22 @@ With TCP ingress enabled:
   -tcp-listen-port  9100
 ```
 
+With Source-Specific Multicast (RFC 4607) — see [SSM Support Plan](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/SourceSpecificMulticast/ssm-support-plan.md):
+
+```bash
+./shard-proxy \
+  -iface            eth0 \
+  -shard-bits       2 \
+  -scope            site \
+  -source-mode      ssm \
+  -bind-source      fd20::a01    # MUST be unique per replica
+```
+
+`-source-mode=ssm` switches the data plane to the `FF3x::/32` SSM range
+(FF35 for site scope, FF3E for global per RFC 8815). `-bind-source` is
+mandatory in SSM mode and MUST differ across replicas — anycast or
+ECMP-shared sources break PIM-SSM RPF.
+
 See [docs/configuration.md](docs/configuration.md) for all flags and environment variable equivalents.
 
 ## Container image
