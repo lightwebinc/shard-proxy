@@ -262,30 +262,81 @@ func main() {
 				HasShardBitsPin: true,
 			},
 		})
+		hooks := proxymanifest.Hooks{
+			OnShardBitsChange: func(prev, next uint8) {
+				if cfg.AutoConfigLiveResharding {
+					// Bridging mode: the OnSuccessorChange hook is the
+					// authoritative driver for re-shard. Restart-on-
+					// ShardBits is suppressed because the bridging path
+					// keeps the proxy live; the actual swap to the new
+					// active engine happens when the Successor cutover
+					// triggers a process restart at TransitionEpoch
+					// (achieved by re-requesting restart inside the
+					// Successor handler when the window expires).
+					slog.Info("auto-config noted ShardBits change (live-resharding mode; restart deferred to TransitionEpoch)",
+						"prev", prev, "next", next)
+					return
+				}
+				slog.Warn("auto-config adopted new ShardBits (restart mode)",
+					"prev", prev, "next", next)
+				restart.Request("shard_bits change")
+				select {
+				case restartSig <- struct{}{}:
+				default:
+				}
+			},
+			OnSourceModeChange: func(prevSSM, nextSSM bool) {
+				if cfg.AutoConfigLiveResharding {
+					slog.Info("auto-config noted SourceMode change (live-resharding mode; restart deferred to TransitionEpoch)",
+						"prev_ssm", prevSSM, "next_ssm", nextSSM)
+					return
+				}
+				slog.Warn("auto-config adopted new SourceMode (restart mode)",
+					"prev_ssm", prevSSM, "next_ssm", nextSSM)
+				restart.Request("source_mode change")
+				select {
+				case restartSig <- struct{}{}:
+				default:
+				}
+			},
+		}
+		if cfg.AutoConfigLiveResharding {
+			hooks.OnSuccessorChange = func(before, after *commanifest.SuccessorView) {
+				if after == nil {
+					// Successor cleared (cutover or quorum loss).
+					// Clearing here without a restart leaves the proxy
+					// still emitting under the prior active engine; the
+					// next ShardBitsChange (when the pilot rolls
+					// GenerationID forward) is what triggers the actual
+					// swap. Operators driving live re-shards typically
+					// also roll GenerationID at TransitionEpoch.
+					fwd.SetBridging(nil)
+					slog.Info("live-resharding: bridging cleared")
+					return
+				}
+				// Enter / refresh bridging: install a secondary engine
+				// derived from the successor's parameters. The shard
+				// engine uses the same MCPrefix unless successor declares
+				// SSM, in which case we flip to the FF3x prefix (via
+				// shard.Prefix). For brevity we use the SAME prefix as
+				// the active engine; ASM↔SSM transitions in bridging
+				// require a follow-up engine constructor that takes the
+				// SourceMode/Scope tuple per the SSM plan.
+				secondary := shard.New(cfg.MCPrefix, cfg.MCGroupID, uint(after.ShardBits))
+				fwd.SetBridging(&forwarder.BridgingEngine{
+					Secondary:       secondary,
+					TransitionEpoch: int64(after.TransitionEpoch),
+				})
+				slog.Info("live-resharding: bridging engine installed",
+					"successor_shard_bits", after.ShardBits,
+					"transition_epoch", after.TransitionEpoch)
+			}
+		}
 		applier := &proxymanifest.Applier{
 			Registry:  reg,
 			Evaluator: ev,
 			Rec:       rec,
-			Hooks: proxymanifest.Hooks{
-				OnShardBitsChange: func(prev, next uint8) {
-					slog.Warn("auto-config adopted new ShardBits (restart mode)",
-						"prev", prev, "next", next)
-					restart.Request("shard_bits change")
-					select {
-					case restartSig <- struct{}{}:
-					default:
-					}
-				},
-				OnSourceModeChange: func(prevSSM, nextSSM bool) {
-					slog.Warn("auto-config adopted new SourceMode (restart mode)",
-						"prev_ssm", prevSSM, "next_ssm", nextSSM)
-					restart.Request("source_mode change")
-					select {
-					case restartSig <- struct{}{}:
-					default:
-					}
-				},
-			},
+			Hooks:     hooks,
 		}
 		wg.Add(1)
 		go func() {
