@@ -58,10 +58,12 @@ import (
 	"syscall"
 	"time"
 
+	commanifest "github.com/lightwebinc/shard-common/manifest"
 	"github.com/lightwebinc/shard-common/shard"
 	"github.com/lightwebinc/shard-common/txidset"
 	"github.com/lightwebinc/shard-proxy/config"
 	"github.com/lightwebinc/shard-proxy/forwarder"
+	proxymanifest "github.com/lightwebinc/shard-proxy/manifest"
 	"github.com/lightwebinc/shard-proxy/metrics"
 	"github.com/lightwebinc/shard-proxy/worker"
 )
@@ -215,6 +217,88 @@ func main() {
 		}()
 	}
 
+	// ── BRC-137 manifest consumer (auto-shard-config) ────────────────────
+	// Optional, off by default. When enabled, the proxy opens a beacon
+	// socket and runs the manifest evaluator. A ShardBits/SourceMode
+	// adoption triggers a restart by writing into restartSig, which the
+	// signal-handler block below treats as an early SIGTERM.
+	var restart proxymanifest.RestartRequest
+	restartSig := make(chan struct{}, 1)
+	if cfg.AutoConfigEnabled {
+		beaconScopePrefix, ok := config.Scopes[cfg.AutoConfigBeaconScope]
+		if !ok {
+			beaconScopePrefix = 0xFF05
+		}
+		beaconIP := shard.GroupAddr(beaconScopePrefix, cfg.MCGroupID, shard.GroupBeacon)
+		beaconGrp := &net.UDPAddr{IP: beaconIP, Port: cfg.AutoConfigBeaconPort}
+		reg := commanifest.NewRegistry(0)
+
+		// Resolve the first egress interface for the manifest socket;
+		// any iface that can receive on the multicast group works.
+		var mfIface *net.Interface
+		if len(ifaces) > 0 {
+			mfIface = ifaces[0]
+		}
+		ml := &proxymanifest.Listener{
+			Group:    beaconGrp,
+			Iface:    mfIface,
+			Registry: reg,
+			Rec:      rec,
+			Debug:    cfg.Debug,
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := ml.Start(ctxForManifest(done)); err != nil {
+				slog.Error("manifest listener error", "err", err)
+			}
+		}()
+
+		ev := commanifest.NewEvaluator(commanifest.EvaluatorConfig{
+			Quorum:     cfg.AutoConfigPilotQuorum,
+			Hysteresis: cfg.AutoConfigHysteresis,
+			Pin: commanifest.Pin{
+				ShardBits:       uint8(cfg.ShardBits),
+				HasShardBitsPin: true,
+			},
+		})
+		applier := &proxymanifest.Applier{
+			Registry:  reg,
+			Evaluator: ev,
+			Rec:       rec,
+			Hooks: proxymanifest.Hooks{
+				OnShardBitsChange: func(prev, next uint8) {
+					slog.Warn("auto-config adopted new ShardBits (restart mode)",
+						"prev", prev, "next", next)
+					restart.Request("shard_bits change")
+					select {
+					case restartSig <- struct{}{}:
+					default:
+					}
+				},
+				OnSourceModeChange: func(prevSSM, nextSSM bool) {
+					slog.Warn("auto-config adopted new SourceMode (restart mode)",
+						"prev_ssm", prevSSM, "next_ssm", nextSSM)
+					restart.Request("source_mode change")
+					select {
+					case restartSig <- struct{}{}:
+					default:
+					}
+				},
+			},
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			applier.Run(ctxForManifest(done))
+		}()
+		slog.Info("manifest consumer enabled",
+			"beacon", beaconIP.String(),
+			"port", cfg.AutoConfigBeaconPort,
+			"bootstrap", cfg.AutoConfigBootstrap,
+			"quorum", cfg.AutoConfigPilotQuorum)
+	}
+
 	// ── Signal handling ───────────────────────────────────────────────────
 	//
 	// sig is a buffered channel of capacity 1. The buffer is intentional:
@@ -234,7 +318,14 @@ func main() {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 
-	received := <-sig // block until SIGINT or SIGTERM
+	var received os.Signal
+	select {
+	case received = <-sig:
+	case <-restartSig:
+		slog.Warn("auto-config restart triggered, beginning drain",
+			"reason", restart.Reason())
+		received = syscall.SIGTERM
+	}
 
 	slog.Info("received signal, starting drain",
 		"signal", received,
@@ -265,4 +356,16 @@ func main() {
 	wg.Wait()
 
 	slog.Info("all workers stopped; exiting cleanly", "shutdown_elapsed", time.Since(shutStart).Round(time.Millisecond))
+}
+
+// ctxForManifest adapts the worker-style `done` channel (closed on
+// shutdown) into a context.Context for the manifest subsystem. The
+// returned context is cancelled when done is closed.
+func ctxForManifest(done <-chan struct{}) context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-done
+		cancel()
+	}()
+	return ctx
 }
