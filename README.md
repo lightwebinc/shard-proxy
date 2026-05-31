@@ -25,7 +25,7 @@ sender  ──UDP/TCP──►  shard-proxy  ──UDP multicast──►  FF05:
 
 ## Documentation
 
-- [Architecture](docs/architecture.md) — system overview, multi-CPU design, graceful shutdown, package structure
+- [Architecture](docs/architecture.md) — system overview, multi-CPU design, graceful shutdown, BRC-137 manifest consumer, package structure
 - [Configuration](docs/configuration.md) — all flags, environment variables, ingress modes, drain timeout
 
 ## Dependencies
@@ -84,6 +84,18 @@ With Source-Specific Multicast (RFC 4607) — see [SSM Support Plan](https://git
 (FF35 for site scope, FF3E for global per RFC 8815). `-bind-source` is
 mandatory in SSM mode and MUST differ across replicas — anycast or
 ECMP-shared sources break PIM-SSM RPF.
+
+With opt-in BRC-137 auto-shard-config (manifest-driven `ShardBits` adoption) — see [Automatic Shard Configuration Plan](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/AutoShardConfig/auto-shard-config-plan.md):
+
+```bash
+./shard-proxy \
+  -iface                       eth0 \
+  -manifest-consumer-enabled \          # opt-in; off by default
+  -manifest-bootstrap          required \  # fail closed until quorum
+  -pilot-quorum                2
+```
+
+Default behavior is restart-on-adopt; add `-live-resharding` for the dual-emit bridging path. See [docs/architecture.md](docs/architecture.md#brc-137-manifest-consumer-auto-shard-config) for the consumer subsystem.
 
 See [docs/configuration.md](docs/configuration.md) for all flags and environment variable equivalents.
 

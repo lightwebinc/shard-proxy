@@ -310,6 +310,35 @@ Shutdown proceeds in two phases when `SIGINT` or `SIGTERM` is received:
    all goroutines via `sync.WaitGroup`, then flushes the OTLP exporter
    before returning.
 
+## BRC-137 Manifest Consumer (auto-shard-config)
+
+Off by default; enabled with `-manifest-consumer-enabled`. When on, the
+proxy opens a **dedicated beacon-receive socket** on the beacon group
+(`FFxx::B:FFFD`) — unlike the listener, the proxy is not otherwise a
+multicast subscriber — decodes BRC-137 ShardManifest datagrams into the
+shared `shard-common/manifest` `Registry`, and runs the `Evaluator` on a
+1 s tick. Adoption requires `≥ -pilot-quorum` distinct `Authoritative`
+announcers agreeing for the hysteresis window; manual CLI values always
+win. With `-manifest-bootstrap=required` the proxy fails closed: it
+refuses to bind data-plane egress until `ShardBits` (and `SourceModeSSM`
+under SSM) reach quorum.
+
+Two adoption modes, selected by `-live-resharding`:
+
+- **Restart-on-adopt (default).** A `ShardBits`/`SourceModeSSM` change
+  makes the `manifest` applier write the internal restart-signal
+  channel, which `main` handles as an early SIGTERM so the standard
+  [Graceful Shutdown](#graceful-shutdown) drain runs and the
+  orchestrator rolls the pod with the new parameters.
+- **Bridging (opt-in).** The applier installs a `forwarder.BridgingEngine`
+  so the per-frame fast path dual-emits to BOTH the active and successor
+  groups for the bridging window; listener-side egress dedup absorbs the
+  duplicates. Cutover follows the pilot's Successor-block `TransitionEpoch`
+  (floored by `-bridging-window`).
+
+Flag reference and fail-closed rules: [configuration.md](configuration.md#auto-shard-config-brc-137).
+System-level design: [Automatic Shard Configuration Plan](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/AutoShardConfig/auto-shard-config-plan.md).
+
 ## Package Structure
 
 ```
@@ -320,11 +349,14 @@ shard-proxy/
                      Process (BRC-12/BRC-124/BRC-128), ProcessBlock (BRC-131),
                      ProcessSubtreeData (BRC-132), ProcessAnchor (BRC-134),
                      BRC-130 fragmentation; per-worker Egress batcher with
-                     sync.Pool fragment buffers (egress.go)
+                     sync.Pool fragment buffers (egress.go); opt-in
+                     BridgingEngine dual-emit for live resharding
   worker/            per-CPU SO_REUSEPORT UDP ingress loop using recvmmsg
                      (ReadBatch) with frame-version dispatch for BRC-131/
                      BRC-132/BRC-134 (worker.go); TCP ingress listener with
                      BRC-127 routing (tcp.go)
+  manifest/          opt-in BRC-137 consumer: beacon-receive listener +
+                     applier (restart-on-adopt or BridgingEngine dual-emit)
   metrics/           OTel + Prometheus instrumentation
 ```
 
