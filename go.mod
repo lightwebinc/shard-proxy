@@ -3,7 +3,7 @@ module github.com/lightwebinc/shard-proxy
 go 1.25.10
 
 require (
-	github.com/lightwebinc/shard-common v0.11.0
+	github.com/lightwebinc/shard-common v0.13.0
 	github.com/prometheus/client_golang v1.23.2
 	go.opentelemetry.io/otel v1.43.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.43.0
@@ -40,5 +40,3 @@ require (
 	google.golang.org/grpc v1.80.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
-
-replace github.com/lightwebinc/shard-common => ../shard-common
