@@ -39,7 +39,7 @@ const (
 	repoName     = "shard-proxy"
 	commonModule = "github.com/lightwebinc/shard-common"
 	goImage      = "golang:1.25-alpine"
-	lintImage    = "golangci/golangci-lint:v2.5.0-alpine"
+	lintImage    = "golangci/golangci-lint:v2.12.2-alpine"
 )
 
 // buildTargets are the package paths to `go build` into the runtime image.

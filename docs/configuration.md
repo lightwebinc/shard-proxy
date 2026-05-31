@@ -283,6 +283,63 @@ frame. Legacy BRC-12 (V1) frames bypass the gate.
   tier-2 SETNX outcomes.
 - `bsp_txid_claim_errors_total{prefix}` — Redis errors (fail-open).
 
+## Auto-Shard-Config (BRC-137)
+
+Optional consumer of BRC-137 ShardManifest announcements. Default off
+(legacy behavior unchanged); opt-in via `-manifest-consumer-enabled`.
+Unlike the listener, the proxy does not currently join the beacon
+group — enabling auto-config adds a dedicated beacon-receive socket.
+See the [Automatic Shard Configuration Plan](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/AutoShardConfig/auto-shard-config-plan.md)
+for the system-level design.
+
+### `-manifest-consumer-enabled` / `MANIFEST_CONSUMER_ENABLED` (default: `false`)
+
+Master switch. When true, the proxy opens an IPv6 multicast socket on
+the beacon group (FFxx::B:FFFD) on the configured scope, decodes
+incoming ShardManifest datagrams (MsgType 0x40; non-manifest MsgTypes
+are silently dropped), and runs the manifest evaluator on a 1 s tick.
+
+### `-manifest-bootstrap` / `MANIFEST_BOOTSTRAP` (default: `optional`)
+
+`optional` ⇒ start with CLI/env values. `required` ⇒ refuse to bind
+data-plane egress until quorum is reached for `ShardBits` (and
+`SourceModeSSM` when SSM).
+
+### `-pilot-quorum` / `PILOT_QUORUM` (default: `2`)
+
+Minimum distinct authoritative announcers required for adoption. `1`
+is permitted (logs a warning).
+
+### `-pilot-hysteresis` / `PILOT_HYSTERESIS` (default: `0`)
+
+Duration a candidate value must hold quorum before adoption. `0`
+selects `2 × AnnounceInterval` of the candidate manifest.
+
+### `-manifest-beacon-scope` / `MANIFEST_BEACON_SCOPE` (default: empty)
+
+Multicast scope for the beacon-group join. Empty inherits `-scope`.
+
+### `-manifest-beacon-port` / `MANIFEST_BEACON_PORT` (default: `9001`)
+
+UDP port on which the proxy joins the beacon group to receive BRC-137
+manifests. Matches the shard-manifest daemon's `-port`.
+
+### `-live-resharding` / `LIVE_RESHARDING` (default: `false`)
+
+Opt-in BRC-137 bridging mode. When false (default), a `ShardBits` or
+`SourceModeSSM` adoption triggers a graceful restart (the manifest
+applier writes into the internal restart-signal channel, which the
+main signal-select handles as an early SIGTERM so the standard drain
+path runs). When true, the applier installs a secondary
+`forwarder.BridgingEngine` on the forwarder so the per-frame fast
+path emits to BOTH the active and successor groups; the
+listener-side egress dedup absorbs the duplicate frames.
+
+### `-bridging-window` / `BRIDGING_WINDOW` (default: `0`)
+
+Local floor on the bridging duration. `0` ⇒ honour the pilot's
+`TransitionEpoch` verbatim.
+
 ## Helm chart
 
 Every flag documented in this file is exposed under `.config` in the corresponding Helm chart's `values.yaml`. See the chart repository for installation snippets and the `values.schema.json` for validation rules.

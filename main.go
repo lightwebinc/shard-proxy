@@ -58,10 +58,12 @@ import (
 	"syscall"
 	"time"
 
+	commanifest "github.com/lightwebinc/shard-common/manifest"
 	"github.com/lightwebinc/shard-common/shard"
 	"github.com/lightwebinc/shard-common/txidset"
 	"github.com/lightwebinc/shard-proxy/config"
 	"github.com/lightwebinc/shard-proxy/forwarder"
+	proxymanifest "github.com/lightwebinc/shard-proxy/manifest"
 	"github.com/lightwebinc/shard-proxy/metrics"
 	"github.com/lightwebinc/shard-proxy/worker"
 )
@@ -215,6 +217,139 @@ func main() {
 		}()
 	}
 
+	// ── BRC-137 manifest consumer (auto-shard-config) ────────────────────
+	// Optional, off by default. When enabled, the proxy opens a beacon
+	// socket and runs the manifest evaluator. A ShardBits/SourceMode
+	// adoption triggers a restart by writing into restartSig, which the
+	// signal-handler block below treats as an early SIGTERM.
+	var restart proxymanifest.RestartRequest
+	restartSig := make(chan struct{}, 1)
+	if cfg.AutoConfigEnabled {
+		beaconScopePrefix, ok := config.Scopes[cfg.AutoConfigBeaconScope]
+		if !ok {
+			beaconScopePrefix = 0xFF05
+		}
+		beaconIP := shard.GroupAddr(beaconScopePrefix, cfg.MCGroupID, shard.GroupBeacon)
+		beaconGrp := &net.UDPAddr{IP: beaconIP, Port: cfg.AutoConfigBeaconPort}
+		reg := commanifest.NewRegistry(0)
+
+		// Resolve the first egress interface for the manifest socket;
+		// any iface that can receive on the multicast group works.
+		var mfIface *net.Interface
+		if len(ifaces) > 0 {
+			mfIface = ifaces[0]
+		}
+		ml := &proxymanifest.Listener{
+			Group:    beaconGrp,
+			Iface:    mfIface,
+			Registry: reg,
+			Rec:      rec,
+			Debug:    cfg.Debug,
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := ml.Start(ctxForManifest(done)); err != nil {
+				slog.Error("manifest listener error", "err", err)
+			}
+		}()
+
+		ev := commanifest.NewEvaluator(commanifest.EvaluatorConfig{
+			Quorum:     cfg.AutoConfigPilotQuorum,
+			Hysteresis: cfg.AutoConfigHysteresis,
+			Pin: commanifest.Pin{
+				ShardBits:       uint8(cfg.ShardBits),
+				HasShardBitsPin: true,
+			},
+		})
+		hooks := proxymanifest.Hooks{
+			OnShardBitsChange: func(prev, next uint8) {
+				if cfg.AutoConfigLiveResharding {
+					// Bridging mode: the OnSuccessorChange hook is the
+					// authoritative driver for re-shard. Restart-on-
+					// ShardBits is suppressed because the bridging path
+					// keeps the proxy live; the actual swap to the new
+					// active engine happens when the Successor cutover
+					// triggers a process restart at TransitionEpoch
+					// (achieved by re-requesting restart inside the
+					// Successor handler when the window expires).
+					slog.Info("auto-config noted ShardBits change (live-resharding mode; restart deferred to TransitionEpoch)",
+						"prev", prev, "next", next)
+					return
+				}
+				slog.Warn("auto-config adopted new ShardBits (restart mode)",
+					"prev", prev, "next", next)
+				restart.Request("shard_bits change")
+				select {
+				case restartSig <- struct{}{}:
+				default:
+				}
+			},
+			OnSourceModeChange: func(prevSSM, nextSSM bool) {
+				if cfg.AutoConfigLiveResharding {
+					slog.Info("auto-config noted SourceMode change (live-resharding mode; restart deferred to TransitionEpoch)",
+						"prev_ssm", prevSSM, "next_ssm", nextSSM)
+					return
+				}
+				slog.Warn("auto-config adopted new SourceMode (restart mode)",
+					"prev_ssm", prevSSM, "next_ssm", nextSSM)
+				restart.Request("source_mode change")
+				select {
+				case restartSig <- struct{}{}:
+				default:
+				}
+			},
+		}
+		if cfg.AutoConfigLiveResharding {
+			hooks.OnSuccessorChange = func(before, after *commanifest.SuccessorView) {
+				if after == nil {
+					// Successor cleared (cutover or quorum loss).
+					// Clearing here without a restart leaves the proxy
+					// still emitting under the prior active engine; the
+					// next ShardBitsChange (when the pilot rolls
+					// GenerationID forward) is what triggers the actual
+					// swap. Operators driving live re-shards typically
+					// also roll GenerationID at TransitionEpoch.
+					fwd.SetBridging(nil)
+					slog.Info("live-resharding: bridging cleared")
+					return
+				}
+				// Enter / refresh bridging: install a secondary engine
+				// derived from the successor's parameters. The shard
+				// engine uses the same MCPrefix unless successor declares
+				// SSM, in which case we flip to the FF3x prefix (via
+				// shard.Prefix). For brevity we use the SAME prefix as
+				// the active engine; ASM↔SSM transitions in bridging
+				// require a follow-up engine constructor that takes the
+				// SourceMode/Scope tuple per the SSM plan.
+				secondary := shard.New(cfg.MCPrefix, cfg.MCGroupID, uint(after.ShardBits))
+				fwd.SetBridging(&forwarder.BridgingEngine{
+					Secondary:       secondary,
+					TransitionEpoch: int64(after.TransitionEpoch),
+				})
+				slog.Info("live-resharding: bridging engine installed",
+					"successor_shard_bits", after.ShardBits,
+					"transition_epoch", after.TransitionEpoch)
+			}
+		}
+		applier := &proxymanifest.Applier{
+			Registry:  reg,
+			Evaluator: ev,
+			Rec:       rec,
+			Hooks:     hooks,
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			applier.Run(ctxForManifest(done))
+		}()
+		slog.Info("manifest consumer enabled",
+			"beacon", beaconIP.String(),
+			"port", cfg.AutoConfigBeaconPort,
+			"bootstrap", cfg.AutoConfigBootstrap,
+			"quorum", cfg.AutoConfigPilotQuorum)
+	}
+
 	// ── Signal handling ───────────────────────────────────────────────────
 	//
 	// sig is a buffered channel of capacity 1. The buffer is intentional:
@@ -234,7 +369,14 @@ func main() {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 
-	received := <-sig // block until SIGINT or SIGTERM
+	var received os.Signal
+	select {
+	case received = <-sig:
+	case <-restartSig:
+		slog.Warn("auto-config restart triggered, beginning drain",
+			"reason", restart.Reason())
+		received = syscall.SIGTERM
+	}
 
 	slog.Info("received signal, starting drain",
 		"signal", received,
@@ -265,4 +407,16 @@ func main() {
 	wg.Wait()
 
 	slog.Info("all workers stopped; exiting cleanly", "shutdown_elapsed", time.Since(shutStart).Round(time.Millisecond))
+}
+
+// ctxForManifest adapts the worker-style `done` channel (closed on
+// shutdown) into a context.Context for the manifest subsystem. The
+// returned context is cancelled when done is closed.
+func ctxForManifest(done <-chan struct{}) context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-done
+		cancel()
+	}()
+	return ctx
 }

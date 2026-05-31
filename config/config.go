@@ -120,6 +120,19 @@ type Config struct {
 	TxidDedupPrefix    string
 	TxidDedupTTL       time.Duration
 	TxidDedupLocalCap  int
+
+	// Auto-shard-config (BRC-137 manifest consumer). All fields are opt-in.
+	// When AutoConfigEnabled is false, the proxy does not join the beacon
+	// group at all and the other fields are ignored. When true, the proxy
+	// opens a beacon socket (posture-aware) and runs the manifest evaluator.
+	AutoConfigEnabled        bool
+	AutoConfigBootstrap      string        // "optional" (default) | "required"
+	AutoConfigPilotQuorum    int           // default 2
+	AutoConfigHysteresis     time.Duration // 0 ⇒ 2 × AnnounceInterval
+	AutoConfigBeaconScope    string        // "" ⇒ inherit MCScope
+	AutoConfigBeaconPort     int           // default 9001 (BRC-137 manifest port)
+	AutoConfigLiveResharding bool          // opt-in bridging mode (default: restart-on-adopt)
+	AutoConfigBridgingWindow time.Duration // 0 ⇒ honour pilot TransitionEpoch
 }
 
 // Load parses flags and environment variables, validates all values, and
@@ -183,6 +196,23 @@ func Load() (*Config, error) {
 
 	bits := flag.Uint("shard-bits", uint(envInt("SHARD_BITS", 2)),
 		"txid prefix bit width used as the shard key (1–15)")
+
+	flag.BoolVar(&c.AutoConfigEnabled, "manifest-consumer-enabled", envBool("MANIFEST_CONSUMER_ENABLED", false),
+		"opt-in BRC-137 manifest consumer for auto-shard-config (off by default)")
+	flag.StringVar(&c.AutoConfigBootstrap, "manifest-bootstrap", envStr("MANIFEST_BOOTSTRAP", "optional"),
+		"manifest bootstrap behavior: 'optional' (default) | 'required' (refuse data-plane bind until quorum)")
+	flag.IntVar(&c.AutoConfigPilotQuorum, "pilot-quorum", envInt("PILOT_QUORUM", 2),
+		"min distinct authoritative announcers required for adoption; 1 allowed but logs a warning")
+	flag.DurationVar(&c.AutoConfigHysteresis, "pilot-hysteresis", envDuration("PILOT_HYSTERESIS", 0),
+		"hysteresis window before adoption; 0 ⇒ 2 × AnnounceInterval of the candidate manifest")
+	flag.StringVar(&c.AutoConfigBeaconScope, "manifest-beacon-scope", envStr("MANIFEST_BEACON_SCOPE", ""),
+		"multicast scope for the beacon-group join; empty ⇒ inherit -scope")
+	flag.IntVar(&c.AutoConfigBeaconPort, "manifest-beacon-port", envInt("MANIFEST_BEACON_PORT", 9001),
+		"UDP port on which the proxy joins the beacon group to receive BRC-137 manifests")
+	flag.BoolVar(&c.AutoConfigLiveResharding, "live-resharding", envBool("LIVE_RESHARDING", false),
+		"opt-in BRC-137 live-resharding bridging mode (default: restart on ShardBits adoption)")
+	flag.DurationVar(&c.AutoConfigBridgingWindow, "bridging-window", envDuration("BRIDGING_WINDOW", 0),
+		"local floor on bridging duration; 0 ⇒ honour pilot TransitionEpoch verbatim")
 
 	flag.Parse()
 
@@ -271,6 +301,22 @@ func Load() (*Config, error) {
 		if c.TxidDedupPrefix == "" {
 			return nil, fmt.Errorf("txid-dedup-prefix must not be empty when dedup is enabled")
 		}
+	}
+
+	// Auto-shard-config validation.
+	switch c.AutoConfigBootstrap {
+	case "optional", "required":
+	default:
+		return nil, fmt.Errorf("manifest-bootstrap %q unknown; valid: optional, required", c.AutoConfigBootstrap)
+	}
+	if c.AutoConfigPilotQuorum < 1 {
+		return nil, fmt.Errorf("pilot-quorum must be >= 1, got %d", c.AutoConfigPilotQuorum)
+	}
+	if c.AutoConfigBeaconScope == "" {
+		c.AutoConfigBeaconScope = c.MCScope
+	}
+	if _, ok := Scopes[c.AutoConfigBeaconScope]; !ok {
+		return nil, fmt.Errorf("manifest-beacon-scope %q unknown; valid values: link, site, org, global", c.AutoConfigBeaconScope)
 	}
 
 	return c, nil

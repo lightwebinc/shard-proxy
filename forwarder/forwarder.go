@@ -114,6 +114,27 @@ type TxidDedup interface {
 // Forwarder decodes ingress frames (BRC-12 or BRC-124/BRC-128), derives the multicast
 // destination from the TxID, stamps HashKey/SeqNum for BRC-124/BRC-128 frames, and
 // optionally splits large payloads into BRC-130 fragment datagrams.
+// BridgingEngine carries the secondary shard engine used during a
+// BRC-137 live-resharding bridging window. When set on a Forwarder via
+// SetBridging, the per-frame emit path computes both the active and the
+// bridging shard indices and emits to BOTH destinations. The listener's
+// per-TxID egress dedup absorbs the duplicate frame on the receive side.
+//
+// SetBridging is safe to call concurrently with the hot path. A nil
+// pointer means "no bridging in flight" and the hot path is a single
+// emit per frame (the normal, steady-state behaviour).
+type BridgingEngine struct {
+	// Secondary is the successor generation's shard engine. Distinct
+	// ShardBits and (optionally) addressing prefix so the dual-emit
+	// destination is the SUCCESSOR layout.
+	Secondary *shard.Engine
+
+	// TransitionEpoch (Unix seconds) is the time at which the consumer
+	// MUST stop dual-emitting; the applier replaces Secondary with the
+	// new active engine and clears the BridgingEngine pointer.
+	TransitionEpoch int64
+}
+
 type Forwarder struct {
 	engine       *shard.Engine
 	mcPrefix     uint16
@@ -124,6 +145,12 @@ type Forwarder struct {
 	log          *slog.Logger
 	fragDataSize int    // >0 = fragmentation enabled; fragment capacity per datagram
 	bindSource   net.IP // optional; when non-nil egress sockets are syscall.Bind'd to this IPv6 so SSM receivers can pre-declare it
+
+	// bridging is the optional secondary engine used during a BRC-137
+	// live-resharding bridging window. nil ⇒ single-emit (steady
+	// state); non-nil ⇒ dual-emit. Atomic so the applier can swap
+	// without locking the hot path.
+	bridging atomic.Pointer[BridgingEngine]
 
 	// Ingress TxID dedup (nil = disabled). When non-nil, every BRC-124/128,
 	// BRC-131 block, BRC-132 subtree data, and BRC-134 anchor frame claims
@@ -139,6 +166,24 @@ type Forwarder struct {
 	// entry exists the counter is incremented lock-free via atomic.Uint64;
 	// the stripe lock guards only the map lookup/insert path.
 	chains [chainStripes]chainStripe
+}
+
+// SetBridging publishes (or clears) the BRC-137 live-resharding
+// bridging engine. Safe to call from any goroutine; the per-frame
+// emit path reads the pointer atomically.
+//
+// Pass nil to exit bridging mode. Bridging-mode operators MUST
+// orchestrate the swap-and-clear at TransitionEpoch (the applier
+// rebuilds the primary engine with the successor's parameters and
+// then calls SetBridging(nil)).
+func (fw *Forwarder) SetBridging(b *BridgingEngine) {
+	fw.bridging.Store(b)
+}
+
+// Bridging returns the currently-active bridging engine, or nil when
+// the proxy is in steady state. Intended for tests and telemetry.
+func (fw *Forwarder) Bridging() *BridgingEngine {
+	return fw.bridging.Load()
 }
 
 // SetBindSource configures the source IPv6 the kernel will bind for
@@ -327,6 +372,23 @@ func (fw *Forwarder) Process(egr *Egress, raw []byte, src net.Addr, workerID int
 
 	dst := fw.engine.Addr(groupIdx, fw.egressPort)
 	egr.EnqueueData(raw, *dst, groupIdx, workerID)
+
+	// BRC-137 live-resharding bridging: when a secondary engine is
+	// published, dual-emit to the successor layout as well. The
+	// listener's per-TxID egress dedup collapses the duplicate frame
+	// on the receive side. One extra atomic.Pointer.Load + (if
+	// non-nil) one extra EnqueueData per frame; the second branch
+	// short-circuits the common case.
+	if bs := fw.bridging.Load(); bs != nil {
+		bridgeIdx := bs.Secondary.GroupIndex(&f.TxID)
+		// Only emit the secondary when the successor's group differs
+		// from the active group (so frames whose two indices collide
+		// are not literally doubled to the same address).
+		if bridgeIdx != groupIdx {
+			bridgeDst := bs.Secondary.Addr(bridgeIdx, fw.egressPort)
+			egr.EnqueueData(raw, *bridgeDst, bridgeIdx, workerID)
+		}
+	}
 
 	if fw.debug {
 		fw.log.Debug("forwarded",

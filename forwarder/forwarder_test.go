@@ -577,3 +577,63 @@ func TestProbeEgressSocketClosedConn(t *testing.T) {
 	_ = conn.Close()
 	_ = probeEgressSocket(slog.Default(), conn, iface)
 }
+
+// ── BRC-137 live-resharding bridging ────────────────────────────────────────
+
+func TestForwarder_Bridging_DualEmitOnDistinctIndices(t *testing.T) {
+	// Active SB=8, Successor SB=9. A TxID with the 9th bit = 1 gives
+	// active_idx = top-8 bits and successor_idx = top-9 bits, which
+	// differ — the forwarder must enqueue TWO datagrams per target.
+	fw := makeForwarder() // SB=8
+	successor := shard.New(0xFF05, shard.DefaultGroupID, 9)
+	fw.SetBridging(&BridgingEngine{Secondary: successor})
+	if fw.Bridging() == nil {
+		t.Fatalf("Bridging() returned nil after SetBridging")
+	}
+
+	conn, _ := openLoopbackUDP(t)
+	egr := makeEgress(t, fw, conn)
+
+	raw := buildV2Frame(t, 0xFF, 1, []byte("payload"))
+	fw.Process(egr, raw, fakeAddr{}, 0)
+
+	if len(egr.msgs[0]) != 2 {
+		t.Fatalf("target queue len = %d, want 2 (active + bridging)", len(egr.msgs[0]))
+	}
+	a := egr.msgs[0][0].Addr.(*net.UDPAddr)
+	b := egr.msgs[0][1].Addr.(*net.UDPAddr)
+	if a.IP.Equal(b.IP) {
+		t.Errorf("active and bridging destinations are identical (%s); shift was supposed to differ", a.IP)
+	}
+}
+
+func TestForwarder_Bridging_SingleEmitOnIdenticalIndices(t *testing.T) {
+	// Active SB=9 with successor SB=8: a TxID whose top-9-bit suffix is
+	// 0 has the same group address under both engines. The dual-emit
+	// guard MUST suppress the duplicate (only one enqueue per target).
+	fw := New(shard.New(0xFF05, shard.DefaultGroupID, 9), 0xFF05, shard.DefaultGroupID, 9001, false, nil)
+	successor := shard.New(0xFF05, shard.DefaultGroupID, 8)
+	fw.SetBridging(&BridgingEngine{Secondary: successor})
+
+	conn, _ := openLoopbackUDP(t)
+	egr := makeEgress(t, fw, conn)
+
+	raw := buildV2Frame(t, 0x00, 1, []byte("payload"))
+	fw.Process(egr, raw, fakeAddr{}, 0)
+
+	if len(egr.msgs[0]) != 1 {
+		t.Errorf("target queue len = %d, want 1 (collision should suppress dual-emit)", len(egr.msgs[0]))
+	}
+}
+
+func TestForwarder_Bridging_ClearedByNil(t *testing.T) {
+	fw := makeForwarder()
+	fw.SetBridging(&BridgingEngine{Secondary: shard.New(0xFF05, shard.DefaultGroupID, 9)})
+	if fw.Bridging() == nil {
+		t.Fatalf("Bridging not set")
+	}
+	fw.SetBridging(nil)
+	if fw.Bridging() != nil {
+		t.Errorf("Bridging not cleared")
+	}
+}
