@@ -14,9 +14,35 @@ if [ "$(uname)" = "Darwin" ]; then
 else
     LOOPBACK="lo"
     USE_METRICS=1
-    # Ensure loopback has the MULTICAST flag and a multicast route on Linux
+    # Loopback needs the MULTICAST flag and an ff00::/8 route in table local, or
+    # every IPv6 multicast send out lo fails ENETUNREACH ("network is unreachable").
+    #
+    # The kernel does NOT provide that route for loopback: addrconf sends
+    # ARPHRD_LOOPBACK down init_loopback() (which adds only ::1/128), while
+    # addrconf_add_mroute() — the thing that installs ff00::/8 — is reached only
+    # for non-loopback devices. So it must be provisioned once, out of band.
+    #
+    # This used to attempt the mutation here as `... 2>/dev/null || true`. Run as
+    # an ordinary user both commands silently no-op, so the harness reported a
+    # confusing mid-run send failure instead of the real precondition. CHECK and
+    # REFUSE instead: say exactly what to run, once, and stop.
+    if ! ip -6 route show table local type multicast | grep -qw 'dev lo'; then
+        cat >&2 <<'MSG'
+FATAL: loopback is missing its IPv6 multicast route, so every multicast send
+       out lo would fail with "network is unreachable".
+
+       The kernel never creates this route for loopback; it must be installed:
+
+         sudo ip link set lo multicast on
+         sudo ip -6 route replace table local multicast ff00::/8 dev lo               proto kernel metric 256 pref medium
+
+       ('replace' is idempotent; 'append' returns EEXIST on a second run.)
+       On a lab host, prefer a boot-time guard so it survives reboots and any
+       `ip link set lo down` — see multicast-skills for the systemd unit.
+MSG
+        exit 1
+    fi
     ip link set lo multicast on 2>/dev/null || true
-    ip -6 route add ff00::/8 dev lo table local 2>/dev/null || true
 fi
 
 # Compute multicast group list: ff02::0 through ff02::<N-1>
