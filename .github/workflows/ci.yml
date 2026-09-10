@@ -88,8 +88,23 @@ jobs:
 
       - name: Enable IPv6 multicast on loopback
         run: |
+          # The ROUTE-TYPE KEYWORD is the whole point. `route add ff00::/8 dev lo
+          # table local` — what this step ran until now — creates a UNICAST entry
+          # (ff00::/8 dev lo metric 1024) and exits 0, so the step looked healthy
+          # while test/run-e2e.sh's `route show table local type multicast` found
+          # nothing and refused. The kernel never installs this route for loopback
+          # (addrconf sends ARPHRD_LOOPBACK down init_loopback(), which adds only
+          # ::1/128), so CI must provision it, correctly.
+          #
+          # `replace` because it is idempotent; `append` returns EEXIST on a second
+          # run. No `2>/dev/null || true` — masking the failure is exactly how the
+          # wrong route type survived here unnoticed.
           sudo ip link set lo multicast on
-          sudo ip -6 route add ff00::/8 dev lo table local 2>/dev/null || true
+          sudo ip -6 route replace table local multicast ff00::/8 dev lo \
+            proto kernel metric 256 pref medium
+          # Assert the TYPE, not just the exit code: this is the check run-e2e.sh
+          # makes, so a mismatch fails here instead of as a mid-run send error.
+          ip -6 route show table local type multicast | grep -qw 'dev lo'
 
       - name: E2E test
         working-directory: shard-proxy
