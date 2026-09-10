@@ -34,7 +34,8 @@ FATAL: loopback is missing its IPv6 multicast route, so every multicast send
        The kernel never creates this route for loopback; it must be installed:
 
          sudo ip link set lo multicast on
-         sudo ip -6 route replace table local multicast ff00::/8 dev lo               proto kernel metric 256 pref medium
+         sudo ip -6 route replace table local multicast ff00::/8 dev lo \
+           proto kernel metric 256 pref medium
 
        ('replace' is idempotent; 'append' returns EEXIST on a second run.)
        On a lab host, prefer a boot-time guard so it survives reboots and any
