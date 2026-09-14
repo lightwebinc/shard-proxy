@@ -17,6 +17,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/lightwebinc/shard-common/frame"
 	"github.com/lightwebinc/shard-common/objfmt"
@@ -255,6 +256,17 @@ func (fw *Forwarder) ProcessBEEF(egr *Egress, raw []byte, src net.Addr, workerID
 	if !objfmt.IsBEEFObject(bf.Payload) {
 		if fw.rec != nil {
 			fw.rec.PacketDropped(egrIface(egr), workerID, "beef_bad_marker")
+		}
+		return
+	}
+
+	// Rate budgets are charged before the dedup claim, so a flood of
+	// duplicates costs the flooder its budget rather than being free. Relay
+	// and spine re-emission (src == nil) is exempt: those frames were already
+	// charged at the door where they entered.
+	if d := fw.beefLimit.allow(src, len(raw), time.Now()); d != rateAllow {
+		if fw.rec != nil {
+			fw.rec.PacketDropped(egrIface(egr), workerID, d.reason())
 		}
 		return
 	}

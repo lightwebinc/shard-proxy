@@ -222,6 +222,9 @@ type Forwarder struct {
 	beefEngine    *shard.PlaneEngine
 	beefMaxObject int
 	beefPolicy    BEEFSubmitPolicy
+	// beefLimit bounds open-class BEEF ingress per source and per plane at
+	// this door. Nil or unconfigured permits everything; see ratelimit.go.
+	beefLimit *beefLimiter
 
 	// chains is a striped per-flow counter map. Stripe index is derived
 	// from a hash of the sender IP, so concurrent workers handling distinct
