@@ -229,6 +229,36 @@ func (fw *Forwarder) ProcessBEEF(egr *Egress, raw []byte, src net.Addr, workerID
 		return
 	}
 
+	// The submission-record grammar enforces a topic count of 1..15 and the
+	// BEEF marker (objfmt.DecodeBEEFRecord and IsBEEFObject above), so a
+	// publisher that pre-frames its own FrameVer 0x09 must meet the same two
+	// conditions or it bypasses both. BRC-149 makes the marker an ingress
+	// MUST on every acceptance path, and a frame addressed to no topic is
+	// undeliverable by construction: it still costs a full fabric emission,
+	// and because an empty topic election matches every topic it lands on
+	// every aggregator consumer and is billed to them.
+	//
+	// Both checks sit BEFORE the dedup claim on purpose. A drop taken after
+	// the claim would burn the (ContentID, TopicID) key, so a corrected
+	// re-submission of the same object would be suppressed as a duplicate
+	// for the whole TTL.
+	//
+	// These are conformance checks, not an abuse control: a TopicID is an
+	// unverifiable hash, so anything other than the zero value is accepted
+	// here and only the delivery side can tell whether a consumer wanted it.
+	if bf.TopicID == ([32]byte{}) {
+		if fw.rec != nil {
+			fw.rec.PacketDropped(egrIface(egr), workerID, "beef_no_topic")
+		}
+		return
+	}
+	if !objfmt.IsBEEFObject(bf.Payload) {
+		if fw.rec != nil {
+			fw.rec.PacketDropped(egrIface(egr), workerID, "beef_bad_marker")
+		}
+		return
+	}
+
 	if !fw.claimIngress(beefClaimKey(bf.ContentID, bf.TopicID), "brc148", egrIface(egr), workerID) {
 		return
 	}
