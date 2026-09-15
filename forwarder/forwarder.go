@@ -214,6 +214,14 @@ type Forwarder struct {
 	txDedup       TxidDedup
 	txDedupPrefix string
 
+	// beefDedup is the OPTIONAL separate dedup store for the BRC-148 object
+	// plane. Nil means BEEF shares the transaction store, which is the
+	// historical behaviour and is preserved so an upgrade changes nothing.
+	// See SetBEEFDedup for why a shared store is a hazard once the object
+	// plane carries open-class volume.
+	beefDedup       TxidDedup
+	beefDedupPrefix string
+
 	// BEEF object plane (BRC-148). beefEngine derives domain-tagged group
 	// indices (0x1000 + shardIndex(TopicID)) at the plane's own shard-bit
 	// width; beefMaxObject bounds an accepted submission's object bytes
@@ -389,15 +397,57 @@ func (fw *Forwarder) SetTxidDedup(d TxidDedup, prefix string) {
 	fw.txDedupPrefix = prefix
 }
 
+// SetBEEFDedup gives the BRC-148 object plane its OWN dedup store and
+// namespace. Pass nil (the default) to leave BEEF sharing the transaction
+// store, which is what every build did before this existed.
+//
+// Why a separate store matters, and why capacity is the point rather than the
+// prefix: a dedup store is a bounded set, and the transaction plane and the
+// object plane have completely different volume characteristics. Transactions
+// are settlement traffic whose rate is a property of the chain; the object
+// plane is an OPEN class that anyone may publish to with no account. Sharing
+// one bounded set means a high-rate BEEF flood evicts transaction entries,
+// and an evicted entry is a LOST claim: the next copy of that transaction
+// wins the claim again and is re-stamped and re-emitted onto the fabric.
+// So an anonymous object-plane flood turns into duplicate TRANSACTION
+// delivery fleet-wide, on the paying path, without ever touching the
+// transaction port. Separate stores make the two planes' capacity
+// independent, so the blast radius of a flood stays inside the plane it
+// arrived on.
+//
+// The distinct prefix is hygiene rather than protection: BEEF claims key
+// SHA-256(ContentID ‖ TopicID) while transactions key the TxID, so a
+// collision was already negligible. Capacity is the hazard.
+//
+// Must be called before any worker goroutine starts processing.
+func (fw *Forwarder) SetBEEFDedup(d TxidDedup, prefix string) {
+	fw.beefDedup = d
+	fw.beefDedupPrefix = prefix
+}
+
 // claimIngress consults the configured TxID dedup store. Returns true when
 // the caller should proceed (claim won or dedup disabled or fail-open) and
 // false when the frame must be suppressed. The frameType label is used for
 // the suppression metric.
 func (fw *Forwarder) claimIngress(txid [32]byte, frameType, iface string, workerID int) bool {
-	if fw.txDedup == nil {
+	return fw.claimIngressIn(fw.txDedup, fw.txDedupPrefix, txid, frameType, iface, workerID)
+}
+
+// claimBEEFIngress claims on the object plane's own store when one is
+// configured, falling back to the transaction store so a build that never
+// calls SetBEEFDedup behaves exactly as it did before.
+func (fw *Forwarder) claimBEEFIngress(key [32]byte, frameType, iface string, workerID int) bool {
+	if fw.beefDedup != nil {
+		return fw.claimIngressIn(fw.beefDedup, fw.beefDedupPrefix, key, frameType, iface, workerID)
+	}
+	return fw.claimIngressIn(fw.txDedup, fw.txDedupPrefix, key, frameType, iface, workerID)
+}
+
+func (fw *Forwarder) claimIngressIn(store TxidDedup, prefix string, txid [32]byte, frameType, iface string, workerID int) bool {
+	if store == nil {
 		return true
 	}
-	claimed, _ := fw.txDedup.Claim(fw.txDedupPrefix, txid)
+	claimed, _ := store.Claim(prefix, txid)
 	if claimed {
 		return true
 	}
