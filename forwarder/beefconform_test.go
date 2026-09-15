@@ -4,6 +4,8 @@ import (
 	"net"
 	"testing"
 
+	"github.com/lightwebinc/shard-common/frame"
+
 	"github.com/lightwebinc/shard-common/objfmt"
 )
 
@@ -100,4 +102,49 @@ func TestProcessBEEF_RejectedFrameKeepsNoDedupClaim(t *testing.T) {
 	if frames, _ := captureEnqueued(egr); len(frames) != 1 {
 		t.Fatal("corrected re-submission suppressed - a rejected frame burned its dedup claim")
 	}
+}
+
+// TestProcessBEEF_ForgedContentIDDropped is the censorship vector in #68. A
+// pre-framed submission carries its own ContentID, and the dedup key is
+// SHA-256(ContentID ‖ TopicID). Taken on trust, anyone can CLAIM AN OBJECT
+// THEY DO NOT HAVE: frame the ContentID of an object about to be published,
+// win the claim, and every later copy of the REAL object is suppressed
+// fleet-wide as a duplicate. One small frame, no account. The record path
+// never had this hole because it computes the ContentID itself.
+func TestProcessBEEF_ForgedContentIDDropped(t *testing.T) {
+	fw, _ := makeBEEFForwarder(t)
+	src := &net.UDPAddr{IP: net.ParseIP("fd00:evil::1"), Port: 12345}
+	conn, _ := openLoopbackUDP(t)
+	egr := makeEgress(t, fw, conn)
+
+	raw := buildBEEFFrameBytesForged(t, objfmt.TopicID("tm_victim"), beefTestObj, [32]byte{0xAA})
+	fw.ProcessBEEF(egr, raw, src, 0)
+	if frames, _ := captureEnqueued(egr); len(frames) != 0 {
+		t.Fatalf("frame with a forged ContentID forwarded (%d frames) - an attacker can pre-claim the dedup key of an object it does not have", len(frames))
+	}
+
+	// The same object, honestly framed, still passes: the check must not cost
+	// a real publisher anything.
+	fw.ProcessBEEF(egr, buildBEEFFrameBytes(t, "tm_victim", beefTestObj), src, 0)
+	if frames, _ := captureEnqueued(egr); len(frames) != 1 {
+		t.Fatalf("honest pre-framed submission not forwarded - the check rejected legitimate input")
+	}
+}
+
+// buildBEEFFrameBytesForged builds a pre-framed 0x09 frame whose ContentID is
+// whatever the caller says, rather than the object's true identity.
+func buildBEEFFrameBytesForged(t *testing.T, topicID [32]byte, obj []byte, contentID [32]byte) []byte {
+	t.Helper()
+	raw := buildBEEFFrameBytesTopicID(t, topicID, obj)
+	bf, err := frame.DecodeBEEF(raw)
+	if err != nil {
+		t.Fatalf("DecodeBEEF: %v", err)
+	}
+	bf.ContentID = contentID
+	buf := make([]byte, frame.HeaderSize+len(bf.Payload))
+	n, err := frame.EncodeBEEF(bf, buf)
+	if err != nil {
+		t.Fatalf("EncodeBEEF: %v", err)
+	}
+	return buf[:n]
 }

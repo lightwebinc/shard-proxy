@@ -271,6 +271,32 @@ func (fw *Forwarder) ProcessBEEF(egr *Egress, raw []byte, src net.Addr, workerID
 		return
 	}
 
+	// A PRE-FRAMED submission carries its own ContentID, and the dedup key is
+	// SHA-256(ContentID ‖ TopicID). Taking that field on trust lets anyone
+	// CLAIM AN OBJECT THEY DO NOT HAVE: frame a topic with the ContentID of an
+	// object about to be published, win the claim, and every later copy of the
+	// real object is suppressed as a duplicate, fleet-wide, from one small
+	// frame with no account. That is targeted censorship of exactly the thing
+	// the plane exists to deliver. Recomputing it also restores BRC-148's
+	// "identity is the bytes" for consumers that trust the field.
+	//
+	// The record path never had this hole: it computes the ContentID itself
+	// (SubmitBEEF above). Only pre-framing can present one.
+	//
+	// Placed AFTER the rate budget and BEFORE the claim, deliberately. SHA-256d
+	// costs ~2.8us at 256B and ~5.6ms at 1MiB (measured 2026-09-15), so hashing
+	// before the budget would let an unauthenticated flood burn CPU at line
+	// rate; after it, the cost is bounded by a budget the operator already
+	// chose. Relay and spine re-emission (src == nil) is exempt for the same
+	// reason the budget exempts it: the frame was verified at the door where it
+	// entered, and re-hashing at every hop multiplies the cost fleet-wide.
+	if src != nil && bf.ContentID != objfmt.ContentID(bf.Payload) {
+		if fw.rec != nil {
+			fw.rec.PacketDropped(egrIface(egr), workerID, "beef_bad_contentid")
+		}
+		return
+	}
+
 	if !fw.claimBEEFIngress(beefClaimKey(bf.ContentID, bf.TopicID), "brc148", egrIface(egr), workerID) {
 		return
 	}
