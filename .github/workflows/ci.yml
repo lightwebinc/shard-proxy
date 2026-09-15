@@ -2,7 +2,11 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
+    # main only: a branch that has a PR is already covered by the
+    # pull_request run, and a bare-branch push ran the whole matrix a
+    # second time per PR (github.ref differs between the two events, so
+    # the concurrency group cannot dedupe them).
+    branches: [main]
   pull_request:
 
 concurrency:
