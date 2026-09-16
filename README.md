@@ -8,10 +8,12 @@
 
 > Part of the [**BSV Layered Multicast**](https://github.com/lightwebinc/bsv-multicast) open-source project — see the main repository for the full architecture, design docs, and BRC specifications.
 
-A high-throughput proxy that receives Bitcoin SV (BSV Blockchain) transaction
-frames (BRC-124, BRC-128, or legacy BRC-12) over UDP (or TCP for reliable delivery), derives
-an IPv6 multicast group address from the transaction ID, and retransmits to
-subscribers of the corresponding group. Further traffic segmentation is provided
+A high-throughput proxy that receives Bitcoin SV (BSV Blockchain) transactions
+(BRC-124/BRC-128 or legacy BRC-12 frames, or bare header-stripped transactions)
+and BRC-148/149 BEEF submission records over UDP (or TCP for reliable
+delivery), derives an IPv6 multicast group address from the transaction ID (or
+the BEEF TopicID on the object plane), and retransmits to subscribers of the
+corresponding group. Further traffic segmentation is provided
 via subtree-level sharding. Reliable delivery to multicast receivers is supported
 via monotonic transmission flow sequencing. The TCP ingress also forwards
 BRC-127 SubtreeGroupAnnounce datagrams to the control-plane multicast group.
@@ -21,8 +23,8 @@ datagram at the origin edge to cut egress packets-per-second.
 Inspiration: [Multicast within Multicast: Anycast](https://singulargrit.substack.com/p/multicast-within-multicast-anycast), [Multicast as the Only Viable Architecture](https://singulargrit.substack.com/p/multicast-as-the-only-viable-architecture)
 
 ```text
-sender  ──UDP/TCP──►  shard-proxy  ──UDP multicast──►  FF05::<shard>  (iface 0)
-                      (forwarder pipeline) └─────────────────►  FF05::<shard>  (iface 1)
+sender  ──UDP/TCP──►  shard-proxy  ──UDP multicast──►  FF05::B:<shard>  (iface 0)
+                      (forwarder pipeline) └─────────────────►  FF05::B:<shard>  (iface 1)
                                                                  (subset of subscribers)
 ```
 
@@ -33,11 +35,11 @@ sender  ──UDP/TCP──►  shard-proxy  ──UDP multicast──►  FF05:
 
 ## Dependencies
 
-- [`github.com/lightwebinc/shard-common`](https://github.com/lightwebinc/shard-common) — `frame`, `shard`, `seqhash` packages
+- [`github.com/lightwebinc/shard-common`](https://github.com/lightwebinc/shard-common) — `frame`, `bundle`, `objfmt`, `shard`, `seqhash`, `pow`, `cache`, `txidset`, `netjoin`, `manifest`, `logging`, `hostinfo`, `tracing` packages
 
 ## Requirements
 
-- Go 1.25 or later
+- Go 1.26 or later (`go.mod` floor: 1.26.2)
 - Linux kernel 3.9+, FreeBSD 12.3+ (for `SO_REUSEPORT`), MacOS
 - IPv6 enabled on the egress interface(s)
 - Multicast routing / MLD snooping configured for your subscriber fabric
@@ -77,7 +79,10 @@ With TCP ingress enabled:
 ```
 
 Ingress is **transaction-only** at the component boundary: port 8725 accepts
-BRC-12/124/128 transactions (an anchor is an ordinary transaction). The old
+BRC-12/124/128 transactions, framed or bare (an anchor is an ordinary
+transaction), plus BRC-148 BEEF submission records and FrameVer `0x09` frames
+(an open class; `-beef-listen-port`, standard 8728, is an optional dedicated
+BEEF lane for flow separation only). The old
 privileged **miner multicast port was deprecated (2026-07-07)** — blocks and
 subtrees are no longer submitted as multicast frames. They enter only as
 BRC-144 (block) / BRC-143 (subtree) push frames on the proxy's tunnel-bound

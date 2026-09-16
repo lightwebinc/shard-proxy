@@ -173,8 +173,10 @@ type Forwarder struct {
 	// requireEF makes the ingress EF-native: a transaction submission (an
 	// unstamped BRC-124 frame or a bare tx) must be BRC-30 Extended Format;
 	// legacy BRC-12 (V1) frames and raw BRC-124 submissions are rejected. Off by
-	// default (accepts raw + EF). Relayed (already-stamped) frames are exempt —
-	// they were validated at their ingress — so the relay hot path is untouched.
+	// default (accepts raw + EF). Stamped frames are NOT exempt: SeqNum is
+	// sender-chosen, so an exemption keyed on it would be a one-byte opt-out; a
+	// relay lane declares itself with allowStampedIngress and its traffic is EF
+	// anyway. When off, the check is a single predicted branch.
 	// See docs/architecture.md § Transaction ingress (framed, bare, EF-native).
 	requireEF bool
 

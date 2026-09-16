@@ -8,10 +8,13 @@ as fallbacks; hard-coded defaults apply when neither is present.
 | Flag | Env var | Default | Description |
 |------|---------|---------|-------------|
 | `-listen` | `LISTEN_ADDR` | `[::]` | Ingress bind address (without port) |
-| `-udp-listen-port` | `UDP_LISTEN_PORT` | `8725` | UDP transaction ingress — **framed** (BRC-124/128/legacy BRC-12) or **bare** header-stripped transactions, auto-detected by the leading network magic (one tx per datagram). See [Transaction ingress](architecture.md#transaction-ingress-framed-bare-and-ef-native) |
+| `-udp-listen-port` | `UDP_LISTEN_PORT` | `8725` | UDP transaction ingress — **framed** (BRC-124/128/legacy BRC-12), **bare** header-stripped transactions, or a **BEEF submission record** (leading `0xBEEF` tag), auto-detected from the leading bytes (one submission per datagram). See [Transaction ingress](architecture.md#transaction-ingress-framed-bare-and-ef-native) |
 | `-tcp-listen-port` | `TCP_LISTEN_PORT` | `0` | TCP ingress port for reliable delivery (0 = disabled) |
 | `-subtree-listen-port` | `SUBTREE_LISTEN_PORT` | `0` | TCP port accepting BRC-143 subtree push frames (privileged; bind tunnel-side; standard 8726; 0 = disabled) |
 | `-block-listen-port` | `BLOCK_LISTEN_PORT` | `0` | TCP port accepting BRC-144 block push frames (privileged; bind tunnel-side; standard 8727; 0 = disabled) |
+| `-beef-listen-port` | `BEEF_LISTEN_PORT` | `0` | Optional dedicated TCP lane for BRC-148 BEEF submission records (flow separation only — BEEF also rides the tx port; standard 8728; 0 = disabled). See [BRC-148 BEEF object plane](#brc-148-beef-object-plane) |
+| `-beef-shard-bits` | `BEEF_SHARD_BITS` | `0` | BRC-148 BEEF plane shard-bit width (band `0x1000 + 2^bits` groups; 0–12, `0` = single group) |
+| `-beef-max-object-bytes` | `BEEF_MAX_OBJECT_BYTES` | `1048576` | Maximum accepted BEEF object size in bytes (BRC-149 ingress bound), on every acceptance path |
 | `-require-block-pow` | `REQUIRE_BLOCK_POW` | `true` | Gate BRC-131 block announces on a cheap stateless proof-of-work check of the in-frame header. Permissionless (validates work, not identity). **Default ON** — set `=false` to admit unvalidated announces. See [Block-announce proof-of-work](#block-announce-proof-of-work) |
 | `-require-ef` | `REQUIRE_EF` | `false` | **EF-native ingress**: reject raw BRC-12/BRC-124 transaction submissions; only Extended Format (BRC-30) is admitted. Applies to stamped frames too — `SeqNum` is sender-chosen and must not waive the EF posture. See [EF-native ingress](architecture.md#ef-native-ingress--require-ef) |
 | `-allow-stamped-ingress` | `ALLOW_STAMPED_INGRESS` | `false` | Admit framed BRC-124/BRC-128 input that already carries a SeqNum (another proxy's output). **Off by default**: an ingress proxy accepts submissions, not relay. Enable on a spine collect lane or relay hop. See [Stamped ingress](#stamped-ingress) |
@@ -28,7 +31,7 @@ as fallbacks; hard-coded defaults apply when neither is present.
 | `-bind-source` | `BIND_SOURCE` | `""` | IPv6 literal bound on every multicast egress socket via `syscall.Bind` in `openEgressSocket`. **Required when `-source-mode=ssm`** and MUST be distinct per replica — anycast/ECMP-shared sources break PIM-SSM RPF. For single-identity deployments use VRRP active-standby. |
 | `-stamp-source` | `STAMP_SOURCE` | `true` | Authoritatively stamp the BRC HashKey from the **observed** packet source IP, overriding any sender-supplied value, so the per-flow identity is the real ingress source. This is what makes own-traffic exclusion per-consumer at a direct/collapsed edge (the proxy sees each consumer's distinct source). Set `false` **only** behind a source-rewriting load balancer, where every consumer would otherwise appear as the LB address and the upstream-supplied HashKey is trusted instead. |
 | `-workers` | `NUM_WORKERS` | `runtime.NumCPU()` | Worker goroutine count (0 = NumCPU) |
-| `-debug` | `DEBUG` | `false` | Enable per-packet debug logging and multicast loopback |
+| `-debug` | `DEBUG` | `false` | Enable per-packet debug logging and multicast loopback (single-host testing); deprecated alias for `-log-level=debug` |
 | `-drain-timeout` | `DRAIN_TIMEOUT` | `0s` | Pre-drain delay before closing sockets; `/readyz` returns 503 during this window (`0s` = disabled) |
 | `-metrics-addr` | `METRICS_ADDR` | `:9100` | HTTP bind address for `/metrics`, `/healthz`, `/readyz` |
 | `-instance` | `INSTANCE_ID` | hostname | OTel `service.instance.id` for federation |
@@ -44,7 +47,7 @@ as fallbacks; hard-coded defaults apply when neither is present.
 | `-coalesce-carry-txid` | `COALESCE_CARRY_TXID` | `false` | Carry each member's 32-byte TxID on the wire (for downstream dedup / operator accounting) instead of recomputing it on receipt |
 | `-recv-batch` | `BSP_RECV_BATCH` | `32` | Datagrams per `recvmmsg` syscall (1 = per-packet legacy path) |
 | `-retry-tee` | `BSP_RETRY_TEE` | `""` | Mirror each egressed DATA datagram to a co-located retry endpoint's cache-ingest address (e.g. `[::1]:9001`) — needed on a node that originates frames and hosts its own retry cache, since it must never (S,G)-join its own source. Copies are batched into one `sendmmsg` per egress batch. Empty = disabled |
-| `-recv-buf-bytes` | `BSP_RECV_BUF_BYTES` | `0` | Per-worker `SO_RCVBUF` in bytes (`0` = system default; capped by `net.core.rmem_max`) |
+| `-recv-buf-bytes` | `BSP_RECV_BUF_BYTES` | `0` | Per-worker `SO_RCVBUF` in bytes (`0` = the worker default of 4 MiB; the kernel caps the request at `net.core.rmem_max`) |
 | `-ingress-dedup` | `INGRESS_DEDUP` | `true` | Enable ingress TxID dedup. `false` bypasses the dedup gate entirely — only sound for single-proxy ingest topologies. See [Ingress TxID Deduplication](#ingress-txid-dedup) |
 | `-pprof` | `BSP_PPROF` | `false` | Mount `net/http/pprof` at `/debug/pprof/*` on the metrics server (profiling only) |
 
@@ -100,14 +103,17 @@ shard-proxy \
 
 ## Ingress is transaction-only (miner port deprecated)
 
-Ingress accepts **transactions only**: BRC-12 / 124 / 128 (an anchor is an
-ordinary transaction). Privileged control-plane frames — block announce
-(BRC-131), coinbase (BRC-133), subtree data (BRC-132) — arriving on an ingress
-socket are **dropped** and counted (`bsp_privileged_frame_rejected_total`).
+Ingress accepts the **open class set only**: BRC-12 / 124 / 128 transactions,
+framed or bare (an anchor is an ordinary transaction), and BRC-148 BEEF objects
+(submission records or FrameVer `0x09`). Privileged control-plane frames — block
+announce (BRC-131), coinbase (BRC-133), subtree data (BRC-132) — arriving on an
+ingress socket are **dropped** and counted (`bsp_privileged_frame_rejected_total`).
 
 | Socket | Flag | Accepts |
 |--------|------|---------|
-| Transaction ingress | `-udp-listen-port` (8725), `-tcp-listen-port` | BRC-12 / 124 / 128 transactions + BRC-134 anchor. Privileged BRC-131/133/132 frames are dropped. |
+| Transaction ingress | `-udp-listen-port` (8725), `-tcp-listen-port` | BRC-12 / 124 / 128 transactions (framed or bare) + BRC-134 anchor + BRC-148 BEEF (record or `0x09`) + BRC-142 bundle relay (UDP only). Privileged BRC-131/133/132 frames are dropped. |
+| BEEF lane (optional) | `-beef-listen-port` (8728) | BRC-148 BEEF **submission records only** (an `objfmt.ClassBEEF` record stream, so no framed input; a non-record stream desyncs the reader and closes the connection). |
+| Push lanes (privileged) | `-subtree-listen-port` (8726), `-block-listen-port` (8727) | BRC-143 subtree / BRC-144 block push objects, reframed to BRC-132 / BRC-131. |
 
 > **Deprecated 2026-07-07 — the miner multicast port is gone.** The former
 > `-miner-listen-port` / `-miner-tcp-listen-port` / `-tx-accept-privileged`
@@ -244,9 +250,11 @@ The gate therefore runs **before** `claimIngress`, not after.
   TxID itself when reframing, so there is nothing to verify.
 - **BRC-12 (V1) frames are forwarded verbatim** regardless — the legacy wire
   format carries no payload-bound identifier.
-- **Already-stamped frames are *not* exempt.** `-require-ef` exempts them as a
-  relay optimisation, but `SeqNum` is chosen by whoever sent the frame, so
-  exempting on it here would be a one-byte bypass of the gate.
+- **Already-stamped frames are *not* exempt.** `SeqNum` is chosen by whoever
+  sent the frame, so exempting on it would be a one-byte bypass of the gate —
+  the same reasoning that removed the former `-require-ef` exemption (see
+  [Stamped ingress](#stamped-ingress)). A stamped frame admitted via
+  `-allow-stamped-ingress` is still verified here.
 - BRC-142 bundles (`0x08`), BEEF (`0x09`), and the block/subtree/anchor classes
   are unaffected; they carry different identifiers and their own gates.
 
@@ -507,8 +515,9 @@ so scale-up requires no redesign.
 
 The proxy can optionally suppress duplicate ingress frames before stamping
 and multicasting. A two-tier claim store is consulted on every BRC-124/128
-(V2), BRC-131 block (V4), BRC-132 subtree data (V5), and BRC-134 anchor (V6)
-frame. Legacy BRC-12 (V1) frames bypass the gate.
+(V2), BRC-131 block (V4), BRC-132 subtree data (V5), BRC-134 anchor (V6), and
+BRC-149 BEEF (V9, keyed on `SHA-256(ContentID ∥ TopicID)`) frame. Legacy
+BRC-12 (V1) frames and BRC-142 bundle relays bypass the gate.
 
 - **Tier 1** — in-process LRU keyed by TxID, sharded across 64 stripes
   (each with its own mutex) to keep the dedup path from serialising all
@@ -643,5 +652,34 @@ knobs. Canonical spec: `bsv-multicast/docs/brc-148-shard-domain-beef-plane.md`.
 The forwarder expands one record into one stamped frame per topic
 (`SubmitBEEF` → `ProcessBEEF`): HashKey = XXH64(sender ∥ banded groupIdx ∥
 **zeros** — TopicID is excluded from the flow key per the spec), ingress
-dedup claims the **(ContentID, TopicID) pair** under `bsp:beef:`, and objects
-exceeding `-frag-mtu` fragment via BRC-130 with `OrigFrameVer 0x09`.
+dedup claims the **(ContentID, TopicID) pair** as `SHA-256(ContentID ∥ TopicID)`,
+and objects exceeding `-frag-mtu` fragment via BRC-130 with `OrigFrameVer 0x09`.
+
+### Admission
+
+- **Single-topic records only, by default.** The record grammar carries
+  `topicCount` 1..15, but multi-topic fan-out (one object → N frames, up to
+  15× amplification) is an authenticated capability per BRC-149. With no submit
+  policy installed (`Forwarder.SetBEEFSubmitPolicy`, the open-ingress default)
+  a record naming more than one topic is rejected
+  (`bsp_beef_submissions_total{result="multi_topic"}`). A downstream build
+  installs a policy that admits 2..15 topics per source and may lift the
+  object bound for that source (never below `-beef-max-object-bytes`).
+- **Submission results** (`bsp_beef_submissions_total{result}`): `ok`,
+  `disabled`, `malformed`, `oversize`, `bad_marker`, `multi_topic`.
+- **Pre-framed `0x09` input** must meet the same conformance as a record, on
+  every acceptance path and before the dedup claim: object bound
+  (`beef_oversize`), non-zero TopicID (`beef_no_topic`), BEEF marker
+  (`beef_bad_marker`), and — for submitted, not relayed, frames — a ContentID
+  that matches `SHA-256d(payload)` (`beef_bad_contentid`), so a submitter
+  cannot pre-claim an object it does not have. All count in
+  `bsp_packets_dropped_total{reason}`.
+- **Rate budgets** (per source and whole-plane token buckets, objects and
+  bytes; `beef_rate_source` / `beef_rate_plane`) are charged before the dedup
+  claim and exempt relay/spine re-emission. Every budget is **off** in this
+  build (no flags; `Forwarder.SetBEEFRateLimit` is the API a downstream build
+  wires).
+- **Dedup store.** By default BEEF claims share the transaction dedup store
+  and its `-txid-dedup-prefix`. `Forwarder.SetBEEFDedup` gives the object
+  plane its own store so an open-class flood cannot evict transaction claims;
+  no flag exposes it in this build.

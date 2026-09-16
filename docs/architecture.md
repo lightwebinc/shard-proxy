@@ -3,10 +3,13 @@
 ## Overview
 
 shard-proxy receives BSV transaction frames (BRC-12, BRC-124, BRC-128, or
-BRC-134) over UDP (and optionally TCP), derives a deterministic multicast group
-address from each transaction's txid (or routes to a fixed control-plane group
-for BRC-134 anchors), then retransmits the original bytes verbatim to all
-configured egress interfaces. Block (BRC-131) and subtree-data (BRC-132) frames
+BRC-134), bare header-stripped transactions, and BRC-148/149 BEEF objects
+(submission records or FrameVer `0x09`) over UDP (and optionally TCP), derives
+a deterministic multicast group address from each transaction's txid (the
+TopicID on the BEEF plane; a fixed control-plane group for BRC-134 anchors),
+then retransmits the original bytes verbatim to all configured egress
+interfaces. An already-coalesced BRC-142 bundle arriving over UDP is relayed
+verbatim to the group in its header. Block (BRC-131) and subtree-data (BRC-132) frames
 never enter through the public ingress — those sockets are transaction-class
 and drop them (`bsp_privileged_frame_rejected_total`). They originate from the
 privileged BRC-143/144 push lanes (`-subtree-listen-port` / `-block-listen-port`),
@@ -18,7 +21,8 @@ BRC wire formats live in
 
 ```text
 tx sender ──UDP/TCP (8725)──────►  shard-proxy  ──UDP multicast──►  FF05::B:<shard>  (data plane, configurable scope)
-miner ──push lanes (8726/8727)──►  (forwarder pipeline) ├────────►  FF0E::B:FFFE     (GroupBlockBroadcast, BRC-131/134, always global)
+BEEF ─(8725, or 8728 lane)──────►  (forwarder pipeline) ├────────►  FF05::B:1<xxx>   (BRC-148 BEEF plane, IDX 0x1000 + shard(TopicID))
+miner ──push lanes (8726/8727)──►                       ├────────►  FF05::B:FFFE     (GroupBlockBroadcast, BRC-131/134, at the configured scope)
                                                         ├────────►  FF05::B:FFFB     (GroupSubtreeDataAnnounce, BRC-132)
                                                         └────────►  FF05::B:FFFC     (GroupSubtreeGroupAnnounce, BRC-127)
 ```
@@ -60,13 +64,13 @@ the BRC-129 shard zone `0x0000`–`0x0FFF`) are defined in `shard-common/shard/c
 
 | Constant | Index | Canonical Address (group-id `0x000B`) | Purpose |
 |---|---|---|---|
-| `GroupBlockHeader` | 0xFFFA | egress-scope `FF0X::<egress-gid>:FFFA` | Block header egress channel (BRC-135) |
+| `GroupBlockHeader` | 0xFFFA | egress-scope `FF0X::<egress-gid>:FFFA` | Block header egress channel (BRC-135) — emitted by shard-listener's header egress; the proxy never sends on it |
 | `GroupSubtreeDataAnnounce` | 0xFFFB | FF05::B:FFFB (data-plane scope) | BRC-132 subtree data frames |
 | `GroupSubtreeGroupAnnounce` | 0xFFFC | FF05::B:FFFC (data-plane scope) | BRC-127 subtree group announcements |
-| `GroupBeacon` | 0xFFFD | FF05::B:FFFD (site) / FF0E::B:FFFD (global) | ADVERT beacon (BRC-126 discovery) |
-| `GroupBlockBroadcast` | 0xFFFE | **FF0E::B:FFFE (always global)** | BRC-131 block control + BRC-134 anchor frames |
+| `GroupBeacon` | 0xFFFD | FF05::B:FFFD (site) / FF0E::B:FFFD (global) | ADVERT beacon (BRC-126 discovery) + BRC-139 shard manifests |
+| `GroupBlockBroadcast` | 0xFFFE | FF05::B:FFFE (data-plane scope; FF0E::B:FFFE when deployed global) | BRC-131 block control + BRC-133 coinbase + BRC-134 anchor frames |
 
-Per BRC-129 §3, `GroupBlockBroadcast` uses **global scope (FF0E)** regardless of the data-plane scope, because block headers, coinbase, and anchor transactions must reach every subscriber across organisational boundaries.
+BRC-129 names global scope (FF0E) as the deployment posture for `GroupBlockBroadcast`, because block headers, coinbase, and anchor transactions must reach every subscriber across organisational boundaries. The implementation derives the address from the configured `-scope` like every other control group: a site-scoped deployment emits `FF05::B:FFFE`, and an inter-domain one sets `-scope global`.
 
 Per BRC-129 zoning, shard group indices are bounded to `0x0000`–`0x0FFF` — `-shard-bits`
 is at most 12 for conformant deployments (the flag validator enforces `[1, 12]`) — so
@@ -207,17 +211,21 @@ and UDP share the same `forwarder.Forwarder` and egress targets.
 | `0x04` (BRC-131) | Block control | 92 bytes | 48 more + `PayLen` | dropped — `DispatchClass` rejects privileged frames on the transaction-class port |
 | `0x05` (BRC-132) | Subtree data | 92 bytes | 48 more + `PayLen` | dropped — `DispatchClass` rejects privileged frames on the transaction-class port |
 | `0x06` (BRC-134) | Anchor tx | 92 bytes | 48 more + `PayLen` | `ProcessAnchor` |
+| `0x09` (BRC-149) | BEEF object | 92 bytes | 48 more + `PayLen` (bounded by `-beef-max-object-bytes`) | `ProcessBEEF` |
 | `0x30` (MsgType, BRC-127) | SubtreeGroupAnnounce | 64 bytes | 20 more (no payload) | `ForwardControl` |
 
-> The dispatcher branches on `hdrBuf[6]`. For BRC-12/124/131/132/134 this byte is the Frame Version (`0x01`/`0x02`/`0x04`/`0x05`/`0x06`); for BRC-127 it is the MsgType byte (`0x30 = MsgTypeSubtreeGroupAnnounce`).
+> The dispatcher branches on `hdrBuf[6]`. For BRC-12/124/131/132/134/149 this byte is the Frame Version (`0x01`/`0x02`/`0x04`/`0x05`/`0x06`/`0x09`); for BRC-127 it is the MsgType byte (`0x30 = MsgTypeSubtreeGroupAnnounce`). Any other version byte (including a BRC-142 bundle, `0x08`, which is relayed over UDP only) closes the connection.
+>
+> The framed table applies only to a connection whose first bytes are the BSV magic. Grammar is detected once per connection: a leading `0xBEEF` tag selects a BEEF submission-record stream (`objfmt.ClassBEEF` reader → `SubmitBEEF`), and anything else selects a bare-transaction stream (`objfmt.ClassTx` reader → `DispatchBareTx`).
 
 ```
 senders                       proxy (N UDP workers + 1 TCP listener + push lanes)
 ───────                       ──────────────────────────────────────────────────
 tx_a  ──UDP 8725──▶ [worker 0]  ─▶ forwarder ─▶ FF05::B:3    ──▶ sub_X   (shard, data-plane)
 tx_b  ──UDP 8725──▶ [worker 1]  ─▶ forwarder ─▶ FF05::B:1    ──▶ sub_Y
-anc_c ──UDP 8725──▶ [worker N]  ─▶ forwarder ─▶ FF0E::B:FFFE ──▶ sub_Z   (GroupBlockBroadcast, BRC-134)
-blk_d ──TCP 8727──▶ [push lane] ─▶ BRC-144 → BRC-131 ─▶ forwarder ─▶ FF0E::B:FFFE ──▶ sub_Z   (GroupBlockBroadcast)
+anc_c ──UDP 8725──▶ [worker N]  ─▶ forwarder ─▶ FF05::B:FFFE ──▶ sub_Z   (GroupBlockBroadcast, BRC-134)
+beef  ──UDP 8725──▶ [worker 1]  ─▶ SubmitBEEF → 0x09 ─▶ forwarder ─▶ FF05::B:1000 ──▶ sub_V   (BRC-148 BEEF plane, -beef-shard-bits 0)
+blk_d ──TCP 8727──▶ [push lane] ─▶ BRC-144 → BRC-131 ─▶ forwarder ─▶ FF05::B:FFFE ──▶ sub_Z   (GroupBlockBroadcast)
 sub_e ──TCP 8726──▶ [push lane] ─▶ BRC-143 → BRC-132 ─▶ forwarder ─▶ FF05::B:FFFB ──▶ sub_W   (GroupSubtreeDataAnnounce)
 blk_f ──UDP 8725──▶ [worker N]  ─▶ dropped (privileged frame on transaction-class ingress)
 ```
@@ -512,10 +520,21 @@ Protocol primitives are provided by
 
 ```
 shard-common/
-  frame/             BRC-12/BRC-124/BRC-128/BRC-131/BRC-132/BRC-134/BRC-135 wire format: Decode, Encode, constants
+  frame/             BRC-12/BRC-124/BRC-128/BRC-130/BRC-131/BRC-132/BRC-134/
+                     BRC-149 wire formats + BRC-127/BRC-139 control datagrams:
+                     Decode, Encode, constants
   bundle/            BRC-142 coalescing bundle frame (FrameVer 0x08): Bundle
                      Encode/Decode, Member, MemberOverhead, Coalescer/Decoalesce
+  objfmt/            bare/push object codecs (ClassTx/ClassSubtree/ClassBlock/
+                     ClassBEEF): stream reader, MulticastBytes reframe, TxID,
+                     BEEF submission-record codec, TopicID/ContentID
   shard/             txid → group index → IPv6 multicast address derivation;
-                     control group constants and GroupAddr
+                     control group constants, GroupAddr, BRC-148 PlaneEngine
   seqhash/           XXH64 per-flow HashKey computation (senderIPv6 ∥ groupIdx ∥ subtreeID)
+  pow/               stateless block-header proof-of-work gate (-require-block-pow)
+  cache/, txidset/   modular tier-2 backend + two-tier TxID claim store (ingress dedup)
+  netjoin/           IPv6 multicast join helpers (beacon-receive socket)
+  manifest/          BRC-139 Registry + Evaluator (auto-shard-config consumer)
+  logging/, hostinfo/, tracing/
+                     unified slog init, host.inventory, opt-in OTLP tracer
 ```

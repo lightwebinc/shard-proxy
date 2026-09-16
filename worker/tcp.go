@@ -3,14 +3,17 @@
 //
 // # Protocol
 //
-// A connection carries ONE of two grammars, detected from its first bytes —
-// the TCP mirror of the UDP magic-detect unification:
+// A connection carries ONE of three grammars, detected from its first bytes —
+// the TCP mirror of the UDP magic-detect unification (3-way per BRC-148):
 //
 //   - FRAMED: leads with the BSV network magic. A stream of BRC-12, BRC-124,
-//     or BRC-128 frames with no framing envelope. The proxy reads the minimum
-//     header first (44 bytes for BRC-12, extended to 92 for BRC-124/BRC-128),
-//     then the declared payload, and forwards each assembled frame via
+//     BRC-128, BRC-134, or BRC-149 frames (and BRC-127 control datagrams) with
+//     no framing envelope. The proxy reads the minimum header first (44 bytes
+//     for BRC-12, extended to 92 for the 92-byte-header versions), then the
+//     declared payload, and forwards each assembled frame via
 //     [forwarder.Forwarder.DispatchClass].
+//   - BEEF: leads with the 0xBEEF record tag. A stream of BRC-149 submission
+//     records (objfmt.ClassBEEF), each admitted via SubmitBEEF.
 //   - BARE: anything else. A stream of bare transactions (BRC-30 EF
 //     submissions; BRC-12 raw only when EF-native is off), one after another,
 //     self-delimiting by transaction structure (objfmt.ClassTx). Each is
