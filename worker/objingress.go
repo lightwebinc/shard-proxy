@@ -60,7 +60,7 @@ type ObjectIngress struct {
 	// admit observes each object this lane takes off the wire, at the same
 	// point the TCP lane and the UDP worker loop account for one. See
 	// [TCPIngress.SetAdmitHook]; a push lane is an admission boundary too, so
-	// leaving it unhooked would under-report a miner co-brand's ingress.
+	// leaving it unhooked would under-report a miner submitter's ingress.
 	admit AdmitFunc
 	// connAdmit is admit's per-connection form (see [TCPIngress.SetConnAdmitHook]).
 	connAdmit ConnAdmitFunc

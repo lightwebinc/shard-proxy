@@ -39,7 +39,8 @@ FATAL: loopback is missing its IPv6 multicast route, so every multicast send
 
        ('replace' is idempotent; 'append' returns EEXIST on a second run.)
        On a lab host, prefer a boot-time guard so it survives reboots and any
-       `ip link set lo down` — see multicast-skills for the systemd unit.
+       `ip link set lo down`: a oneshot unit ordered before the services, or
+       an rc.d script, that re-runs the two commands above.
 MSG
         exit 1
     fi

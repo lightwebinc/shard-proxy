@@ -12,7 +12,7 @@
 //
 //	tier 1  per-source, at each door        (this file)
 //	tier 2  whole-plane, at each door       (this file)
-//	tier 3  per-consumer, at the listener   (shard-listener-1bsv)
+//	tier 3  per-consumer, at the listener
 //
 // Tiers 1 and 2 bound what ONE door will emit. They do not bound a flood
 // spread across many doors: ingress is anycast, so an attacker reaches every

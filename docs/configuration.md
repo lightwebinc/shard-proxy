@@ -173,8 +173,8 @@ Enable it only where the lane really does carry fabric traffic:
 | Deployment | Setting |
 |------------|---------|
 | Public / customer submission lane (8725) | leave off |
-| `shard-proxy-1bsv -mode collapsed` \| `ingress` | leave off |
-| `shard-proxy-1bsv -mode spine` | **forced on** — the collect lane exists to re-emit stamped fabric frames |
+| An ingress lane taking submissions from senders | leave off |
+| A collect lane whose whole purpose is re-emitting stamped fabric frames | **forced on** |
 | A relay hop forwarding another proxy's output | on |
 
 Enabling it does not waive any other gate: a stamped frame admitted this way is
@@ -272,7 +272,7 @@ Any CPU with SHA-NI (Zen 1+, Ice Lake+, Graviton2+) hashes far faster, and Go's
 enabling on a hot lane** — the ratio above is close to the worst case, not the
 typical one.
 
-Enable it on permissionless / miner-lane ingress and on commercial edges where
+Enable it on permissionless / miner-lane ingress and on any edge where
 submitters are not trusted. Leave it off on spine and relay hops, where the
 frame was already verified at its own ingress.
 

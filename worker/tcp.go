@@ -151,16 +151,16 @@ type TCPIngress struct {
 	// admit, when set, observes every submission this listener takes off the
 	// wire, at the SAME point the UDP worker loop accounts for a received
 	// datagram: after the read, before DispatchClass routes (or drops) it. A
-	// commercial build uses it for per-co-brand admitted-frame/byte counters,
+	// downstream build uses it for per-submitter admitted-frame/byte counters,
 	// which would otherwise miss the TCP lanes entirely — and TCP is the
 	// supported submission transport, so an ingress-side attribution metric
 	// wired only into the UDP loop reads zero on a real fabric. nil = no hook,
 	// and the call sites cost one nil check.
 	admit AdmitFunc
 	// connAdmit is admit's per-connection form: it also receives the LOCAL
-	// address the submitter dialed. A commercial build attributes admission by
-	// destination VIP (one /128 per consumer, per co-brand), which the wire
-	// never carries — only the accepted socket knows it. nil = no hook.
+	// address the submitter dialed. A downstream build attributes admission by
+	// destination address (one /128 per submitter), which the wire never
+	// carries — only the accepted socket knows it. nil = no hook.
 	connAdmit ConnAdmitFunc
 	// coalesceLinger, when >0 AND coalescing is armed on a connection, is the
 	// bounded window a connection accumulates same-flow frames before flushing,
