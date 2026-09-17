@@ -617,6 +617,37 @@ Multicast scope for the beacon-group join. Empty inherits `-scope`.
 UDP port on which the proxy joins the beacon group to receive BRC-139
 manifests. Matches the shard-manifest daemon's `-port`.
 
+### `-control-group-compat` / `CONTROL_GROUP_COMPAT` (default: `both`)
+
+Which prefix the control-plane group address (BRC-129 index `0xFFFD`) is
+derived from, during the transition to the conformant one.
+
+BRC-126 and BRC-129 both require the control-plane groups to take the
+source-specific `FF3x` prefix when the fabric runs SSM. Releases before this
+one always derived the any-source `FF0x` prefix for the manifest beacon
+whatever `-source-mode` said, even though the data plane in the same process
+derived `FF3x` correctly. Correcting it moves a live group address, and a
+beacon that lands on the wrong group raises no error anywhere: the symptom is
+silence.
+
+| Value | Behaviour |
+|-------|-----------|
+| `asm-only` | Always the any-source prefix, ignoring `-source-mode`. The pre-fix wire, kept byte for byte. |
+| `both` | Join the legacy and the derived address. **Default**, because this proxy is a receiver on that group. |
+| `derived` | The conformant address per BRC-126 and BRC-129. The end state. |
+
+Under `-source-mode asm` all three collapse to one prefix, so the flag does
+nothing in an any-source deployment.
+
+The default is chosen so that upgrading a binary never moves the wire: a
+receiver joins both addresses and hears an un-upgraded and an upgraded sender
+alike. Roll receivers (this proxy, and the listener) first, then the senders
+(retry-endpoint, shard-manifest, whose default is `asm-only`), then set the
+senders to `derived`, then the receivers. Setting a sender to `derived` before
+every receiver is upgraded is the one ordering that silently strands a peer.
+
+The flag is temporary and goes away once the fleet is conformant.
+
 ### `-live-resharding` / `LIVE_RESHARDING` (default: `false`)
 
 Opt-in BRC-139 bridging mode. When false (default), a `ShardBits` or

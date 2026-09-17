@@ -193,11 +193,16 @@ type Config struct {
 	// When AutoConfigEnabled is false, the proxy does not join the beacon
 	// group at all and the other fields are ignored. When true, the proxy
 	// opens a beacon socket (posture-aware) and runs the manifest evaluator.
-	AutoConfigEnabled        bool
-	AutoConfigBootstrap      string        // "optional" (default) | "required"
-	AutoConfigPilotQuorum    int           // default 2
-	AutoConfigHysteresis     time.Duration // 0 ⇒ 2 × AnnounceInterval
-	AutoConfigBeaconScope    string        // "" ⇒ inherit MCScope
+	AutoConfigEnabled     bool
+	AutoConfigBootstrap   string        // "optional" (default) | "required"
+	AutoConfigPilotQuorum int           // default 2
+	AutoConfigHysteresis  time.Duration // 0 ⇒ 2 × AnnounceInterval
+	AutoConfigBeaconScope string        // "" ⇒ inherit MCScope
+	// ControlGroupCompat selects which prefix the control-plane group
+	// (BRC-129 index 0xFFFD) is derived from during the FF0x→FF3x
+	// transition: asm-only | both | derived. See controlgroup.go. The
+	// proxy is a receiver on that group, so the default is "both".
+	ControlGroupCompat       string
 	AutoConfigBeaconPort     int           // default 9001 (BRC-139 manifest port)
 	AutoConfigLiveResharding bool          // opt-in bridging mode (default: restart-on-adopt)
 	AutoConfigBridgingWindow time.Duration // 0 ⇒ honour pilot TransitionEpoch
@@ -327,6 +332,10 @@ func Load() (*Config, error) {
 		"min distinct authoritative announcers required for adoption; 1 allowed but logs a warning")
 	flag.DurationVar(&c.AutoConfigHysteresis, "pilot-hysteresis", envDuration("PILOT_HYSTERESIS", 0),
 		"hysteresis window before adoption; 0 ⇒ 2 × AnnounceInterval of the candidate manifest")
+	flag.StringVar(&c.ControlGroupCompat, "control-group-compat", envStr("CONTROL_GROUP_COMPAT", ControlGroupBoth),
+		"control-plane group prefix during the FF0x->FF3x transition: "+
+			"asm-only (pre-fix wire) | both (join legacy and derived; default, receiver-safe) | "+
+			"derived (BRC-126/BRC-129 conformant). Temporary; see docs/configuration.md")
 	flag.StringVar(&c.AutoConfigBeaconScope, "manifest-beacon-scope", envStr("MANIFEST_BEACON_SCOPE", ""),
 		"multicast scope for the beacon-group join; empty ⇒ inherit -scope")
 	flag.IntVar(&c.AutoConfigBeaconPort, "manifest-beacon-port", envInt("MANIFEST_BEACON_PORT", 9001),

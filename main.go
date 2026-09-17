@@ -378,12 +378,22 @@ func main() {
 	var restart proxymanifest.RestartRequest
 	restartSig := make(chan struct{}, 1)
 	if cfg.AutoConfigEnabled {
-		beaconScopePrefix, ok := config.Scopes[cfg.AutoConfigBeaconScope]
-		if !ok {
-			beaconScopePrefix = 0xFF05
+		// BRC-129 derives the control-plane group's prefix from the source
+		// mode, so under SSM the manifest announcer publishes to FF3x. The
+		// default compat value joins the legacy address too, which is what
+		// lets the announcer move without stranding this proxy.
+		beaconPrefixes, err := cfg.ManifestBeaconGroupPrefixes()
+		if err != nil {
+			slog.Error("manifest beacon group derivation failed",
+				"scope", cfg.AutoConfigBeaconScope, "err", err)
+			os.Exit(1)
 		}
-		beaconIP := shard.GroupAddr(beaconScopePrefix, cfg.MCGroupID, shard.GroupBeacon)
-		beaconGrp := &net.UDPAddr{IP: beaconIP, Port: cfg.AutoConfigBeaconPort}
+		beaconGroups := make([]*net.UDPAddr, 0, len(beaconPrefixes))
+		for _, p := range beaconPrefixes {
+			ip := shard.GroupAddr(p, cfg.MCGroupID, shard.GroupBeacon)
+			beaconGroups = append(beaconGroups, &net.UDPAddr{IP: ip, Port: cfg.AutoConfigBeaconPort})
+		}
+		beaconGrp := beaconGroups[0]
 		reg := commanifest.NewRegistry(0)
 
 		// Resolve the first egress interface for the manifest socket;
@@ -394,6 +404,7 @@ func main() {
 		}
 		ml := &proxymanifest.Listener{
 			Group:    beaconGrp,
+			Groups:   beaconGroups,
 			Iface:    mfIface,
 			Registry: reg,
 			Rec:      rec,
@@ -512,8 +523,13 @@ func main() {
 			defer wg.Done()
 			applier.Run(ctxForManifest(done))
 		}()
+		beaconIPs := make([]string, 0, len(beaconGroups))
+		for _, g := range beaconGroups {
+			beaconIPs = append(beaconIPs, g.IP.String())
+		}
 		slog.Info("manifest consumer enabled",
-			"beacon", beaconIP.String(),
+			"beacon", beaconIPs,
+			"compat", cfg.ControlGroupCompat,
 			"port", cfg.AutoConfigBeaconPort,
 			"bootstrap", cfg.AutoConfigBootstrap,
 			"quorum", cfg.AutoConfigPilotQuorum)

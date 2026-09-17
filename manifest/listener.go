@@ -28,7 +28,14 @@ import (
 
 // Listener owns the proxy's manifest-receive socket.
 type Listener struct {
+	// Group is the single group to join. Groups, when non-empty, supersedes
+	// it: during the FF0x->FF3x control-plane transition a proxy joins the
+	// legacy and derived addresses at once, and they share a port, so they
+	// must be two joins on ONE socket. Two sockets on one port would each
+	// see the other's traffic through IPV6_MULTICAST_ALL and process every
+	// manifest twice.
 	Group    *net.UDPAddr   // FFxx::B:FFFD on the chosen scope
+	Groups   []*net.UDPAddr // optional; all share Group's port
 	Iface    *net.Interface // multicast-egress iface (must support recv)
 	Sources  []netip.Addr   // empty ⇒ ASM; non-empty ⇒ SSM bootstrap.beacon ∪ bootstrap.manifest
 	Registry *commanifest.Registry
@@ -52,8 +59,8 @@ func (l *Listener) Start(ctx context.Context) error {
 	_ = conn.SetReadBuffer(1 << 16)
 
 	log.Info("manifest listener started",
-		"group", l.Group.IP.String(),
-		"port", l.Group.Port,
+		"groups", groupIPs(l.groups()),
+		"port", l.groups()[0].Port,
 		"posture", posture(l.Sources),
 		"sources", len(l.Sources))
 
@@ -114,23 +121,37 @@ func (l *Listener) Start(ctx context.Context) error {
 // openGroupConn opens the receive socket. ASM uses
 // net.ListenMulticastUDP; SSM uses ListenPacket + netjoin.Join so the
 // (S,G) filter list goes through one shared helper.
-func (l *Listener) openGroupConn() (*net.UDPConn, error) {
-	if len(l.Sources) == 0 {
-		return net.ListenMulticastUDP("udp6", l.Iface, l.Group)
+// groups returns the addresses to join: Groups when set, else the single
+// Group. Callers may assume at least one entry and a shared port.
+func (l *Listener) groups() []*net.UDPAddr {
+	if len(l.Groups) > 0 {
+		return l.Groups
 	}
-	pc, err := net.ListenPacket("udp6", fmt.Sprintf("[::]:%d", l.Group.Port))
+	return []*net.UDPAddr{l.Group}
+}
+
+func groupIPs(gs []*net.UDPAddr) []string {
+	out := make([]string, 0, len(gs))
+	for _, g := range gs {
+		out = append(out, g.IP.String())
+	}
+	return out
+}
+
+func (l *Listener) openGroupConn() (*net.UDPConn, error) {
+	gs := l.groups()
+	// One group, no sources: keep the stdlib path byte-for-byte.
+	if len(gs) == 1 && len(l.Sources) == 0 {
+		return net.ListenMulticastUDP("udp6", l.Iface, gs[0])
+	}
+	pc, err := net.ListenPacket("udp6", fmt.Sprintf("[::]:%d", gs[0].Port))
 	if err != nil {
-		return nil, fmt.Errorf("ssm listen %d: %w", l.Group.Port, err)
+		return nil, fmt.Errorf("ssm listen %d: %w", gs[0].Port, err)
 	}
 	uc, ok := pc.(*net.UDPConn)
 	if !ok {
 		_ = pc.Close()
 		return nil, fmt.Errorf("ssm listen: unexpected conn type %T", pc)
-	}
-	ga, ok := netip.AddrFromSlice(l.Group.IP.To16())
-	if !ok {
-		_ = uc.Close()
-		return nil, fmt.Errorf("ssm listen: bad group address %s", l.Group.IP)
 	}
 	raw, err := uc.SyscallConn()
 	if err != nil {
@@ -138,11 +159,21 @@ func (l *Listener) openGroupConn() (*net.UDPConn, error) {
 		return nil, fmt.Errorf("ssm listen: SyscallConn: %w", err)
 	}
 	var joinErr error
-	if cerr := raw.Control(func(fd uintptr) {
-		joinErr = netjoin.Join(int(fd), l.Iface.Index, ga, l.Sources)
-	}); cerr != nil {
-		_ = uc.Close()
-		return nil, fmt.Errorf("ssm listen: Control: %w", cerr)
+	for _, g := range gs {
+		ga, ok := netip.AddrFromSlice(g.IP.To16())
+		if !ok {
+			_ = uc.Close()
+			return nil, fmt.Errorf("ssm listen: bad group address %s", g.IP)
+		}
+		if cerr := raw.Control(func(fd uintptr) {
+			joinErr = netjoin.Join(int(fd), l.Iface.Index, ga, l.Sources)
+		}); cerr != nil {
+			_ = uc.Close()
+			return nil, fmt.Errorf("ssm listen: Control: %w", cerr)
+		}
+		if joinErr != nil {
+			break
+		}
 	}
 	if joinErr != nil {
 		_ = uc.Close()
