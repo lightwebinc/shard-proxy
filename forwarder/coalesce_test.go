@@ -246,3 +246,62 @@ func TestCoalesce_SeqNumContiguousAcrossBatches(t *testing.T) {
 		t.Errorf("bundle SeqNums across batches = %d,%d, want 1,2 (contiguous per flow)", s1, s2)
 	}
 }
+
+// A bundle packed at the default cap must leave as a datagram that fits the
+// path MTU. -coalesce-max-bytes is an ON-THE-WIRE budget: the IPv6 (40) and
+// UDP (8) headers ride outside the bundle body, so budgeting the body alone
+// put a 1548-byte datagram on a 1500-byte path.
+func TestCoalesce_BundleDatagramFitsPathMTU(t *testing.T) {
+	fw := makeForwarder()
+	fw.SetCoalesce(true, DefaultCoalesceMaxBytes, 0, true) // carried TxIDs = worst case
+	conn, _ := openLoopbackUDP(t)
+	egr := NewEgress(fw, makeTargets(t, conn), 8, nil)
+	src := &net.UDPAddr{IP: net.ParseIP("::1"), Port: 12345}
+
+	// 40 × 200-byte members into one (group, subtree) flow: several bundles,
+	// each of which the packer fills right up to the budget.
+	for i := 0; i < 40; i++ {
+		raw := buildV2Frame(t, 0xAB, 0, make([]byte, 200))
+		raw[9] = byte(i + 1) // unique TxID
+		fw.Process(egr, raw, src, 0)
+	}
+	fw.FlushCoalesced(egr, 0)
+
+	sent := drain(egr)
+	if len(sent) < 2 {
+		t.Fatalf("sent %d datagrams; expected the budget to bind and split the flow", len(sent))
+	}
+	for i, raw := range sent {
+		if !frame.IsBundle(raw) {
+			t.Fatalf("datagram %d is not a bundle", i)
+		}
+		if got := len(raw) + ipv6UDPHeaderSize; got > DefaultCoalesceMaxBytes {
+			t.Errorf("datagram %d is %d bytes on the wire (bundle %d + %d IPv6/UDP), exceeds the %d-byte path MTU",
+				i, got, len(raw), ipv6UDPHeaderSize, DefaultCoalesceMaxBytes)
+		}
+	}
+}
+
+// The single-member eligibility gate uses the same wire budget: a member that
+// would only fit once the IPv6/UDP headers are ignored must fall through to
+// the individual-frame path rather than become an oversize datagram.
+func TestCoalesce_EligibilityUsesWireBudget(t *testing.T) {
+	fw := makeForwarder()
+	fw.SetCoalesce(true, DefaultCoalesceMaxBytes, 0, false)
+	conn, _ := openLoopbackUDP(t)
+	egr := NewEgress(fw, makeTargets(t, conn), 8, nil)
+	src := &net.UDPAddr{IP: net.ParseIP("::1"), Port: 12345}
+
+	// Body would be 66 + 2 + 1400 = 1468 ≤ 1500, but the datagram would be
+	// 1516 on the wire.
+	fw.Process(egr, buildV2Frame(t, 0xCD, 0, make([]byte, 1400)), src, 0)
+	if len(egr.coal.buckets) != 0 {
+		t.Fatalf("member that only fits without IPv6/UDP headers was buffered: buckets = %d", len(egr.coal.buckets))
+	}
+
+	// One byte under the true budget still coalesces.
+	fw.Process(egr, buildV2Frame(t, 0xCD, 0, make([]byte, DefaultCoalesceMaxBytes-ipv6UDPHeaderSize-bundle.HeaderSize-bundle.MemberOverhead(false))), src, 0)
+	if len(egr.coal.buckets) != 1 {
+		t.Fatalf("member exactly at the wire budget should coalesce: buckets = %d", len(egr.coal.buckets))
+	}
+}

@@ -7,9 +7,11 @@ import (
 	"github.com/lightwebinc/shard-common/frame"
 )
 
-// DefaultCoalesceMaxBytes is the bundle datagram cap used when coalescing is
-// enabled without an explicit byte budget. 1500 = the public-internet Ethernet
-// MTU (the realistic baseline; jumbo is a controlled-underlay upside).
+// DefaultCoalesceMaxBytes is the path-MTU budget used when coalescing is
+// enabled without an explicit one. 1500 = the public-internet Ethernet MTU
+// (the realistic baseline; jumbo is a controlled-underlay upside). It bounds
+// the EMITTED DATAGRAM, so the IPv6 + UDP headers are subtracted from it
+// before the bundle body is packed (see [Forwarder.SetCoalesce]).
 const DefaultCoalesceMaxBytes = 1500
 
 // coalBuffer accumulates eligible BRC-124/128 transactions during one receive
@@ -128,9 +130,11 @@ func (fw *Forwarder) FlushCoalesced(egr *Egress, workerID int) {
 	if egr == nil || egr.coal == nil || len(egr.coal.buckets) == 0 {
 		return
 	}
-	maxBytes := fw.coalesceMaxBytes
+	// Budget the bundle BODY: the caller's number is a path MTU, and the
+	// datagram it bounds also carries the IPv6 and UDP headers.
+	maxBytes := fw.coalesceBudget
 	if maxBytes <= 0 {
-		maxBytes = DefaultCoalesceMaxBytes
+		maxBytes = DefaultCoalesceMaxBytes - ipv6UDPHeaderSize
 	}
 	overhead := bundle.MemberOverhead(fw.coalesceCarryTxid)
 	shardBits := uint8(fw.engine.ShardBits())

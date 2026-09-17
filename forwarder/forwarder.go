@@ -98,10 +98,20 @@ type Target struct {
 	PC    *ipv6.PacketConn
 }
 
+// ipv6UDPHeaderSize is the per-datagram network overhead every emitted
+// datagram carries below UDP's payload: 40 bytes IPv6 header + 8 bytes UDP
+// header. Any budget expressed as a PATH MTU must subtract it before the
+// wire format's own header is counted, or the emitted datagram overshoots the
+// path by exactly this much.
+const ipv6UDPHeaderSize = 40 + 8
+
 // ipv6UDPOverhead is the fixed per-datagram overhead subtracted from the
-// path MTU to derive the fragment data capacity: 40 bytes IPv6 header +
-// 8 bytes UDP header + 104 bytes BRC-130 frame header.
-const ipv6UDPOverhead = 40 + 8 + 104
+// path MTU to derive the BRC-130 fragment data capacity: the IPv6 + UDP
+// headers plus the 104-byte BRC-130 frame header. BRC-142 bundles take the
+// same subtraction ([Forwarder.SetCoalesce]); the bundle's own 66-byte header
+// is counted inside the budget rather than here because the packer sizes the
+// bundle body itself.
+const ipv6UDPOverhead = ipv6UDPHeaderSize + frame.HeaderSizeV3
 
 // TxidDedup is the minimal interface a TxID claim store must satisfy. It is
 // satisfied by *txidset.Store from shard-common; the forwarder depends
@@ -158,7 +168,8 @@ type Forwarder struct {
 	// batch and packed into bundle datagrams at batch end to cut egress
 	// packets-per-second. Opt-in, off by default. See coalesce.go.
 	coalesce           bool
-	coalesceMaxBytes   int  // bundle datagram cap in bytes; resolved >0 by SetCoalesce
+	coalesceMaxBytes   int  // on-the-wire datagram budget (path MTU) in bytes; resolved >0 by SetCoalesce
+	coalesceBudget     int  // bundle body budget = coalesceMaxBytes − ipv6UDPHeaderSize
 	coalesceMaxMembers int  // members per bundle; ≤0 ⇒ uint16 max (MTU-bound in practice)
 	coalesceCarryTxid  bool // carry per-member TxID on the wire vs recompute on receipt
 
@@ -376,16 +387,20 @@ func (fw *Forwarder) SetVerifyPayloadHash(v bool) { fw.verifyPayloadHash = v }
 // eligible BRC-124/128 transactions are buffered per (sender, group, subtree)
 // during each receive batch and packed into bundle datagrams at batch end,
 // cutting egress packets-per-second for shard-dense traffic at zero added
-// latency (the window is one receive batch). maxBytes caps the bundle datagram
-// (≤0 ⇒ [DefaultCoalesceMaxBytes]); maxMembers caps members per bundle (≤0 ⇒
-// uint16 max); carryTxid includes the per-member TxID on the wire. Off by
-// default; must be called before any worker constructs its Egress.
+// latency (the window is one receive batch). maxBytes is the PATH MTU budget
+// for the emitted datagram (≤0 ⇒ [DefaultCoalesceMaxBytes]) — the same kind of
+// number as [Forwarder.SetFragMTU], so the IPv6 + UDP headers come off it
+// before the bundle is packed and a bundle built at 1500 leaves as a
+// 1500-byte datagram, not a 1548-byte one. maxMembers caps members per bundle
+// (≤0 ⇒ uint16 max); carryTxid includes the per-member TxID on the wire. Off
+// by default; must be called before any worker constructs its Egress.
 func (fw *Forwarder) SetCoalesce(enabled bool, maxBytes, maxMembers int, carryTxid bool) {
 	fw.coalesce = enabled
 	if maxBytes <= 0 {
 		maxBytes = DefaultCoalesceMaxBytes
 	}
 	fw.coalesceMaxBytes = maxBytes
+	fw.coalesceBudget = maxBytes - ipv6UDPHeaderSize
 	fw.coalesceMaxMembers = maxMembers
 	fw.coalesceCarryTxid = carryTxid
 }
@@ -585,10 +600,16 @@ const (
 	// the public user/consumer ingress port.
 	IngressTransaction
 
-	// IngressBEEF accepts only BRC-148 BEEF traffic (framed FrameVerV9 and
-	// bare submission records). It is the class for the optional dedicated
-	// BEEF lane (flow separation / load balancing — never admission: the
-	// open port accepts BEEF regardless).
+	// IngressBEEF accepts only BRC-148 BEEF traffic. It is the class for the
+	// optional dedicated BEEF lane (flow separation / load balancing — never
+	// admission: the open port accepts BEEF regardless).
+	//
+	// In practice the lane carries SUBMISSION RECORDS ONLY: its one socket
+	// (-beef-listen-port) reads with objfmt's ClassBEEF record reader, which
+	// walks the record grammar, so a framed FrameVerV9 datagram never reaches
+	// DispatchClass on this class — it desyncs the reader and the connection
+	// is dropped. The dispatch still accepts a framed 0x09 frame because the
+	// class is the frame-set predicate, not the socket's grammar.
 	IngressBEEF
 )
 
@@ -920,7 +941,7 @@ func (fw *Forwarder) process(egr *Egress, raw []byte, src net.Addr, workerID int
 		// single member would not fit the bundle MTU. The bundle — not the
 		// member — is HashKey/SeqNum-stamped at flush, so raw is left untouched.
 		if fw.coalesce && egr != nil && egr.coal != nil && fw.bridging.Load() == nil &&
-			bundle.HeaderSize+bundle.MemberOverhead(fw.coalesceCarryTxid)+len(f.Payload) <= fw.coalesceMaxBytes {
+			bundle.HeaderSize+bundle.MemberOverhead(fw.coalesceCarryTxid)+len(f.Payload) <= fw.coalesceBudget {
 			egr.coal.add(ip, groupIdx, f.SubtreeID, f.TxID, f.Payload)
 			return
 		}

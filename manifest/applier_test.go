@@ -21,9 +21,12 @@ func mustAddr(s string) netip.Addr {
 
 func authoritativeManifest(id uint32, sb uint8) *frame.ShardManifest {
 	return &frame.ShardManifest{
-		Flags:            frame.ShardManifestFlagAuthoritative | frame.ShardManifestFlagGroupsValid | frame.ShardManifestFlagPilotOnly,
-		InstanceID:       id,
-		Epoch:            1746800000,
+		Flags:      frame.ShardManifestFlagAuthoritative | frame.ShardManifestFlagGroupsValid | frame.ShardManifestFlagPilotOnly,
+		InstanceID: id,
+		// Registry expiry is Epoch + TTL (BRC-139), so a fixture dated
+		// in the past is born expired. These appliers run on the wall
+		// clock, so the manifest has to be stamped now.
+		Epoch:            uint32(time.Now().Unix()), //nolint:gosec // wraps in 2106
 		AnnounceInterval: 300,
 		ShardBits:        sb,
 		Groups:           []uint16{0},
@@ -178,8 +181,11 @@ func beefDomainManifest(id uint32, sb, beefBits uint8) *frame.ShardManifest {
 	m := &frame.ShardManifest{
 		Flags: frame.ShardManifestFlagAuthoritative | frame.ShardManifestFlagDomainsValid |
 			frame.ShardManifestFlagGroupsValid | frame.ShardManifestFlagPilotOnly,
-		InstanceID:       id,
-		Epoch:            1746800000,
+		InstanceID: id,
+		// Registry expiry is Epoch + TTL (BRC-139), so a fixture dated
+		// in the past is born expired. These appliers run on the wall
+		// clock, so the manifest has to be stamped now.
+		Epoch:            uint32(time.Now().Unix()), //nolint:gosec // wraps in 2106
 		AnnounceInterval: 300,
 		ShardBits:        sb,
 		Groups:           []uint16{0},

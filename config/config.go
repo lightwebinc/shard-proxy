@@ -133,7 +133,7 @@ type Config struct {
 	// Opt-in: pack many small same-(group, subtree) transactions arriving in one
 	// receive batch into a single bundle datagram to cut egress pps. Off by default.
 	Coalesce           bool
-	CoalesceMaxBytes   int  // max bundle datagram size (0 ⇒ 1500, the Ethernet MTU baseline)
+	CoalesceMaxBytes   int  // path MTU budget for the emitted bundle datagram, IPv6+UDP headers included (0 ⇒ 1500, the Ethernet MTU baseline)
 	CoalesceMaxMembers int  // max members per bundle (0 ⇒ MTU-bound)
 	CoalesceCarryTxid  bool // include per-member TxID on the wire (dedup/accounting) vs recompute
 
@@ -273,7 +273,7 @@ func Load() (*Config, error) {
 	flag.BoolVar(&c.Coalesce, "coalesce", envBool("COALESCE", false),
 		"opt-in BRC-142 frame coalescing (pack many small same-(group,subtree) tx per datagram to cut pps)")
 	flag.IntVar(&c.CoalesceMaxBytes, "coalesce-max-bytes", envInt("COALESCE_MAX_BYTES", 1500),
-		"max coalesced bundle datagram size in bytes (typical: 1500 Ethernet, 9000 jumbo)")
+		"path MTU budget for a coalesced BRC-142 bundle, in bytes ON THE WIRE (typical: 1500 Ethernet, 9000 jumbo). The 48-byte IPv6+UDP header is subtracted before packing, like -frag-mtu, so a bundle never exceeds this on the path")
 	flag.IntVar(&c.CoalesceMaxMembers, "coalesce-max-members", envInt("COALESCE_MAX_MEMBERS", 0),
 		"max member transactions per bundle (0 = MTU-bound)")
 	flag.BoolVar(&c.CoalesceCarryTxid, "coalesce-carry-txid", envBool("COALESCE_CARRY_TXID", false),

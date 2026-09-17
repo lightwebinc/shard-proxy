@@ -42,7 +42,7 @@ as fallbacks; hard-coded defaults apply when neither is present.
 | `-trace-sampling` | `TRACE_SAMPLING` | `0` | Distributed-trace head sampling ratio `0`–`1` (`0` = tracing off, no-op tracer; exports via `-otlp-endpoint`; control-plane only, never the packet hot path) |
 | `-frag-mtu` | `FRAG_MTU` | `1500` | Path MTU for BRC-130 fragmentation; default 1500 (Ethernet baseline). Set to the **smallest** MTU on the egress path — on a tunnelled fabric that is the tunnel inner MTU, not the local NIC. `0` = disabled, which strands every payload above MTU−140 (1360 at 1500) as an undeliverable oversize datagram |
 | `-coalesce` | `COALESCE` | `false` | Opt-in BRC-142 origin-side frame coalescing (pack many small same-`(group, subtree)` tx per datagram to cut egress pps). See [BRC-142 Coalescing](#brc-142-coalescing-origin-side) |
-| `-coalesce-max-bytes` | `COALESCE_MAX_BYTES` | `1500` | Max coalesced bundle datagram size in bytes (1500 = Ethernet MTU baseline; 9000 for jumbo on a controlled underlay) |
+| `-coalesce-max-bytes` | `COALESCE_MAX_BYTES` | `1500` | Path MTU budget for a coalesced bundle, **on the wire** (1500 = Ethernet MTU baseline; 9000 for jumbo on a controlled underlay). The 48-byte IPv6+UDP header is subtracted before packing, exactly like `-frag-mtu` |
 | `-coalesce-max-members` | `COALESCE_MAX_MEMBERS` | `0` | Max member transactions per bundle (`0` = MTU-bound only) |
 | `-coalesce-carry-txid` | `COALESCE_CARRY_TXID` | `false` | Carry each member's 32-byte TxID on the wire (for downstream dedup / operator accounting) instead of recomputing it on receipt |
 | `-recv-batch` | `BSP_RECV_BATCH` | `32` | Datagrams per `recvmmsg` syscall (1 = per-packet legacy path) |
@@ -335,7 +335,10 @@ transactions.
 Within a single receive batch the worker buckets eligible BRC-124/BRC-128
 transactions by their `(sender, group, subtree)` flow and, at batch end, packs
 each bucket into one or more bundle datagrams (up to the byte/member budget)
-before the egress flush. Each bundle draws its `HashKey`/`SeqNum` from the **same
+before the egress flush. The byte budget is a **path MTU**: the packer first
+subtracts the 48-byte IPv6+UDP header, so the bundle body is capped at
+`-coalesce-max-bytes − 48` (1452 at the 1500 default) and the datagram that
+leaves the NIC is never larger than the configured MTU. Each bundle draws its `HashKey`/`SeqNum` from the **same
 per-flow counter** that stamps individual frames, so a flow's bundles and any
 individual frames it also emits share one contiguous sequence space — a listener
 gap-tracks the `(group, subtree, HashKey)` flow uniformly regardless of frame
@@ -353,7 +356,7 @@ node whose role is to relay bundles.
 | Flag | Env | Default | Notes |
 |------|-----|---------|-------|
 | `-coalesce` | `COALESCE` | `false` | Master switch. Off = every transaction egresses as its own frame (legacy) |
-| `-coalesce-max-bytes` | `COALESCE_MAX_BYTES` | `1500` | Bundle datagram cap. `1500` = public-internet Ethernet MTU (realistic baseline); `9000` for jumbo on a controlled underlay. `0` also means 1500 |
+| `-coalesce-max-bytes` | `COALESCE_MAX_BYTES` | `1500` | Path MTU budget for the emitted bundle datagram, IPv6+UDP headers included. `1500` = public-internet Ethernet MTU (realistic baseline); `9000` for jumbo on a controlled underlay. `0` also means 1500. Set it to the SMALLEST MTU on the egress path, as with `-frag-mtu` |
 | `-coalesce-max-members` | `COALESCE_MAX_MEMBERS` | `0` | Hard cap on member transactions per bundle. `0` = bounded only by `-coalesce-max-bytes` (capped by the wire `TxCount` uint16) |
 | `-coalesce-carry-txid` | `COALESCE_CARRY_TXID` | `false` | When set, each member carries its 32-byte TxID on the wire (for downstream dedup / operator accounting) — an all-or-none flag across the bundle. When unset the receiver recomputes TxIDs, saving 32 B/member |
 

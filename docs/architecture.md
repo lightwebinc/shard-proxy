@@ -159,7 +159,8 @@ their `(sender, group, subtree)` flow in a per-`Egress` `coalBuffer`
 (`forwarder/coalesce.go`); member payloads alias the worker's reused receive
 buffers. At batch end — immediately before `Egress.Flush` overwrites those
 buffers — `Forwarder.FlushCoalesced` packs each bucket into one or more owned
-bundle datagrams (up to `-coalesce-max-bytes` / `-coalesce-max-members`) and
+bundle datagrams (up to `-coalesce-max-bytes` — a path-MTU budget, IPv6+UDP
+headers included — and `-coalesce-max-members`) and
 enqueues them. Each bundle draws its `HashKey`/`SeqNum` from the **same
 per-flow striped counter** (`nextSeq`) that stamps individual frames, so a
 flow's bundles interleave contiguously with any individual frames it also

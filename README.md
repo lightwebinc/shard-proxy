@@ -113,7 +113,7 @@ datagram at the origin edge; a relay spine forwards bundles verbatim) — see
 ./shard-proxy \
   -iface              eth0 \
   -coalesce \                    # opt-in; off by default
-  -coalesce-max-bytes 1500       # Ethernet-MTU bundles
+  -coalesce-max-bytes 1500       # path MTU for a bundle datagram (IPv6+UDP included)
 ```
 
 With opt-in BRC-139 auto-shard-config (manifest-driven `ShardBits` adoption) — see [Automatic Shard Configuration Plan](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#automatic-shard-configuration):
