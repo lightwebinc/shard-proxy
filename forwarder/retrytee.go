@@ -6,6 +6,8 @@ import (
 	"net"
 
 	"golang.org/x/net/ipv6"
+
+	"github.com/lightwebinc/shard-proxy/metrics"
 )
 
 // retryTee mirrors every egressed DATA datagram to a local retry-endpoint cache
@@ -48,7 +50,12 @@ type retryTee struct {
 
 	// failed counts datagrams the tee could not deliver. A tee failure must never
 	// affect real egress — the cache is an optimisation, the forward path is not —
-	// so errors are counted and logged once, never propagated.
+	// so errors are counted and logged once, never propagated. It is ALSO exported
+	// as bsp_tee_failed_total{kind}: a tee that silently drops leaves the cache
+	// incomplete while the node keeps advertising it, and without a metric that is
+	// invisible until a listener burns a tier hop on the MISS.
+	rec    *metrics.Recorder
+	kind   string
 	failed uint64
 	logged bool
 }
@@ -92,7 +99,7 @@ func (s *TeeSocket) Close() error { return s.pc.Close() }
 
 // newRetryTee dials a private socket for this tee (the original per-Egress
 // form, still used by the long-lived UDP worker egresses).
-func newRetryTee(addr string, batchHint int) (*retryTee, error) {
+func newRetryTee(addr string, batchHint int, rec *metrics.Recorder, kind string) (*retryTee, error) {
 	s, err := NewTeeSocket(addr)
 	if err != nil {
 		return nil, err
@@ -102,19 +109,23 @@ func newRetryTee(addr string, batchHint int) (*retryTee, error) {
 		pc:    s.pc,
 		addr:  s.addr,
 		owned: true,
+		rec:   rec,
+		kind:  kind,
 		msgs:  make([]ipv6.Message, 0, batchHint),
-		log:   slog.Default().With("component", "retry-tee"),
+		log:   slog.Default().With("component", "retry-tee", "kind", kind),
 	}, nil
 }
 
 // newSharedTee builds a tee buffer over an already-open shared TeeSocket.
-func newSharedTee(s *TeeSocket, batchHint int) *retryTee {
+func newSharedTee(s *TeeSocket, batchHint int, rec *metrics.Recorder, kind string) *retryTee {
 	return &retryTee{
 		w:    s.pc,
 		pc:   s.pc,
 		addr: s.addr,
+		rec:  rec,
+		kind: kind,
 		msgs: make([]ipv6.Message, 0, batchHint),
-		log:  slog.Default().With("component", "retry-tee"),
+		log:  slog.Default().With("component", "retry-tee", "kind", kind),
 	}
 }
 
@@ -139,6 +150,9 @@ func (t *retryTee) flush() {
 			missed = 0
 		}
 		t.failed += uint64(missed)
+		if t.rec != nil {
+			t.rec.TeeFailed(t.kind, int64(missed))
+		}
 		if !t.logged {
 			t.logged = true // log once; the counter carries the rest
 			t.log.Warn("retry tee write incomplete — the co-located cache will MISS "+

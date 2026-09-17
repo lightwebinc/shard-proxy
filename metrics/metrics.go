@@ -173,6 +173,9 @@ type Recorder struct {
 	coalesceFlush        metric.Int64Counter
 	coalesceMembersHisto metric.Int64Histogram
 
+	// Loopback tee to the co-located retry cache / listener.
+	teeFailed metric.Int64Counter
+
 	// Control-plane forwarding (TCP ingress + BRC-127)
 	ctrlFramesForwarded metric.Int64Counter
 	tcpConnections      metric.Int64Counter
@@ -534,6 +537,11 @@ func New(instanceID string, numWorkers int, otlpEndpoint string, otlpInterval ti
 		return nil, err
 	}
 
+	if r.teeFailed, err = meter.Int64Counter("bsp_tee_failed_total",
+		metric.WithDescription("Datagrams the loopback tee could not deliver, by kind (retry cache / local listener mirror). "+
+			"Non-zero means the co-located cache will MISS for those frames and listeners will escalate a tier.")); err != nil {
+		return nil, err
+	}
 	if r.ctrlFramesForwarded, err = meter.Int64Counter("bsp_control_frames_forwarded_total",
 		metric.WithDescription("BRC-127 control datagrams forwarded to multicast (e.g. SubtreeGroupAnnounce)")); err != nil {
 		return nil, err
@@ -669,6 +677,19 @@ func (r *Recorder) CoalesceFlushed(iface string, workerID, n int, reason string)
 		r.coalesceMembers.Add(ctx, int64(n), opt)
 		r.coalesceMembersHisto.Record(ctx, int64(n), opt)
 	}
+}
+
+// TeeFailed records datagrams a loopback tee could not deliver. kind is "retry"
+// (the co-located retry cache) or "mirror" (the co-located listener). The tee is
+// best-effort by contract — a failure never touches real egress — so this counter
+// is the ONLY evidence that the co-located cache is quietly incomplete.
+func (r *Recorder) TeeFailed(kind string, n int64) {
+	if n <= 0 {
+		return
+	}
+	r.teeFailed.Add(context.Background(), n, metric.WithAttributes(
+		attribute.String("kind", kind),
+	))
 }
 
 // ControlFrameForwarded records a BRC-127 control datagram forwarded via ForwardControl.

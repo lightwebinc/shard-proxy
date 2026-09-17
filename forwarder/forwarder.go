@@ -1141,7 +1141,7 @@ func (fw *Forwarder) ProcessBlock(egr *Egress, raw []byte, src net.Addr, workerI
 
 	dst := shard.GroupAddr(fw.mcPrefix, fw.mcGroupID, shard.GroupBlockBroadcast)
 	addr := net.UDPAddr{IP: dst, Port: fw.egressPort}
-	egr.EnqueueControl(raw, addr, "block_control", workerID)
+	egr.EnqueueCacheable(raw, addr, "block_control", workerID)
 
 	if fw.debug {
 		fw.log.Debug("block forwarded",
@@ -1199,7 +1199,7 @@ func (fw *Forwarder) ProcessAnchor(egr *Egress, raw []byte, src net.Addr, worker
 
 	dst := shard.GroupAddr(fw.mcPrefix, fw.mcGroupID, shard.GroupBlockBroadcast)
 	addr := net.UDPAddr{IP: dst, Port: fw.egressPort}
-	egr.EnqueueControl(raw, addr, "anchor", workerID)
+	egr.EnqueueCacheable(raw, addr, "anchor", workerID)
 
 	if fw.debug {
 		fw.log.Debug("anchor forwarded",
@@ -1279,7 +1279,7 @@ func (fw *Forwarder) fragmentBlock(egr *Egress, raw []byte, bf *frame.BlockFrame
 		// reassembler can reconstruct the full V4 header.
 		buf[7] = raw[7]
 
-		egr.EnqueueControlPooled(buf[:n], addr, "block_control", workerID, bufPtr)
+		egr.EnqueueCacheablePooled(buf[:n], addr, "block_control", workerID, bufPtr)
 	}
 
 	if fw.debug {
@@ -1341,7 +1341,7 @@ func (fw *Forwarder) ProcessSubtreeData(egr *Egress, raw []byte, src net.Addr, w
 
 	dst := shard.GroupAddr(fw.mcPrefix, fw.mcGroupID, shard.GroupSubtreeDataAnnounce)
 	addr := net.UDPAddr{IP: dst, Port: fw.egressPort}
-	egr.EnqueueControl(raw, addr, "subtree_data", workerID)
+	egr.EnqueueCacheable(raw, addr, "subtree_data", workerID)
 
 	if fw.debug {
 		fw.log.Debug("subtree data forwarded",
@@ -1424,7 +1424,7 @@ func (fw *Forwarder) fragmentSubtreeData(egr *Egress, raw []byte, sf *frame.Subt
 		// the full V5 header (same pattern as fragmentBlock / BRC-131).
 		buf[7] = raw[7]
 
-		egr.EnqueueControlPooled(buf[:n], addr, "subtree_data", workerID, bufPtr)
+		egr.EnqueueCacheablePooled(buf[:n], addr, "subtree_data", workerID, bufPtr)
 	}
 
 	if fw.debug {

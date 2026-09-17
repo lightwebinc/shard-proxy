@@ -176,6 +176,25 @@ type msgMeta struct {
 	size      int
 	workerID  int
 	ctrlLabel string // non-empty → ControlFrameForwarded; empty → PacketForwarded
+
+	// teeable marks a datagram the co-located retry cache can answer a NACK
+	// for: one this proxy has SeqNum-stamped, so the (HashKey, SeqNum) key the
+	// cache derives from the bytes is exactly the key a NACK will ask for.
+	//
+	// It is DELIBERATELY a separate field from ctrlLabel. ctrlLabel is a
+	// METRICS label, and BRC-131 block / BRC-132 subtree / BRC-134 anchor
+	// frames ride the control-group enqueue path purely because they carry an
+	// arbitrary destination address — they are fully stamped, fragmented and
+	// NACK-repairable DATA. Deriving teeability from ctrlLabel conflated the
+	// two and silently withheld every one of those frames from the tee: a node
+	// never (S,G)-joins its own source, so the tee is the ONLY path by which it
+	// can cache its own emissions, and a submit edge was left unable to repair
+	// any of its own subtree or block traffic (measured on testnet tn-edge-1:
+	// 482 of 5787 own datagrams teed, cache_size 0, 0 hits / 1107 misses).
+	// Only genuinely unstamped control frames (ForwardControl / BRC-127
+	// SubtreeGroupAnnounce) are non-teeable — the cache would decode_error
+	// those, which is the drop the original gate was reaching for.
+	teeable bool
 }
 
 // NewEgress constructs an Egress bound to the given targets. batchHint sets
@@ -241,7 +260,7 @@ func (e *Egress) Targets() []Target { return e.targets }
 // EnableRetryTee mirrors egressed DATA datagrams to a co-located retry cache at
 // addr (host:port, normally "[::1]:<ingress-port>"). See retrytee.go.
 func (e *Egress) EnableRetryTee(addr string, batchHint int) error {
-	t, err := newRetryTee(addr, batchHint)
+	t, err := newRetryTee(addr, batchHint, e.rec, "retry")
 	if err != nil {
 		return err
 	}
@@ -253,12 +272,12 @@ func (e *Egress) EnableRetryTee(addr string, batchHint int) error {
 // (one fd serving many per-connection egresses — see TeeSocket). CloseRetryTee
 // on this Egress leaves the shared socket open; its owner closes it.
 func (e *Egress) EnableRetryTeeShared(s *TeeSocket, batchHint int) {
-	e.tee = newSharedTee(s, batchHint)
+	e.tee = newSharedTee(s, batchHint, e.rec, "retry")
 }
 
 // EnableLocalMirrorShared is EnableLocalMirror over a shared TeeSocket.
 func (e *Egress) EnableLocalMirrorShared(s *TeeSocket, batchHint int) {
-	e.mirror = newSharedTee(s, batchHint)
+	e.mirror = newSharedTee(s, batchHint, e.rec, "mirror")
 }
 
 // CoalArmed reports whether this Egress has a BRC-142 coalescing buffer (i.e.
@@ -292,7 +311,7 @@ func (e *Egress) CloseRetryTee() error {
 // delivers own-node frames to a collapsed edge's own listener, which cannot
 // SSM-join its own source. Independent of EnableRetryTee (different target port).
 func (e *Egress) EnableLocalMirror(addr string, batchHint int) error {
-	t, err := newRetryTee(addr, batchHint)
+	t, err := newRetryTee(addr, batchHint, e.rec, "mirror")
 	if err != nil {
 		return err
 	}
@@ -335,6 +354,7 @@ func (e *Egress) EnqueueData(raw []byte, dst net.UDPAddr, groupIdx uint32, worke
 		groupIdx: groupIdx,
 		size:     len(raw),
 		workerID: workerID,
+		teeable:  true,
 	}, nil)
 }
 
@@ -346,6 +366,7 @@ func (e *Egress) EnqueueDataPooled(raw []byte, dst net.UDPAddr, groupIdx uint32,
 		groupIdx: groupIdx,
 		size:     len(raw),
 		workerID: workerID,
+		teeable:  true,
 	}, pooled)
 }
 
@@ -369,6 +390,35 @@ func (e *Egress) EnqueueControlPooled(raw []byte, dst net.UDPAddr, label string,
 	}, pooled)
 }
 
+// EnqueueCacheable is EnqueueControl for a control-GROUP datagram that the
+// co-located retry cache can nonetheless answer NACKs for: BRC-131 block,
+// BRC-132 subtree data and BRC-134 anchor frames (and their BRC-130 fragments)
+// all reach multicast through this path because they address a fixed control
+// group rather than a sharded data group, but every one of them is
+// SeqNum-stamped before it gets here and is cached by class at the far end.
+//
+// They are metered as control frames (same ctrlLabel) and teed as data. Use
+// EnqueueControl only for genuinely unstamped control traffic, which the cache
+// would reject as a decode_error.
+func (e *Egress) EnqueueCacheable(raw []byte, dst net.UDPAddr, label string, workerID int) {
+	e.enqueue(raw, dst, msgMeta{
+		size:      len(raw),
+		workerID:  workerID,
+		ctrlLabel: label,
+		teeable:   true,
+	}, nil)
+}
+
+// EnqueueCacheablePooled is EnqueueCacheable with a pool-recycled backing buffer.
+func (e *Egress) EnqueueCacheablePooled(raw []byte, dst net.UDPAddr, label string, workerID int, pooled *[]byte) {
+	e.enqueue(raw, dst, msgMeta{
+		size:      len(raw),
+		workerID:  workerID,
+		ctrlLabel: label,
+		teeable:   true,
+	}, pooled)
+}
+
 func (e *Egress) enqueue(raw []byte, dst net.UDPAddr, m msgMeta, pooled *[]byte) {
 	e.meta = append(e.meta, m)
 	if pooled != nil {
@@ -377,18 +427,25 @@ func (e *Egress) enqueue(raw []byte, dst net.UDPAddr, m msgMeta, pooled *[]byte)
 	// Data frames address a stable per-(target, group) multicast destination,
 	// so cache it; control frames carry an arbitrary dst and always build fresh.
 	isData := m.ctrlLabel == ""
-	// Mirror to the co-located cache. DATA only: the retry endpoint caches by
-	// (HashKey, SeqNum) and would count a control frame as a decode_error drop.
+	// Mirror to the co-located cache. Everything the cache can key by
+	// (HashKey, SeqNum) — see msgMeta.teeable, which is what decides this and is
+	// NOT the same question as "is this a control frame" for metrics.
 	// This sits in enqueue deliberately — it is the one funnel every frame passes
 	// through AFTER SeqNum stamping and AFTER fragmentation, so the cached bytes
 	// are exactly what a NACK will ask for. Teeing any earlier would populate the
 	// cache with frames that do not match the requests it must answer, which is
 	// worse than an empty cache.
-	if e.tee != nil && isData {
+	if e.tee != nil && m.teeable {
 		e.tee.append(raw)
 	}
-	// Mirror to the co-located listener (own-node delivery). Same funnel + DATA-only
-	// as the retry tee, but a distinct target port the listener binds exclusively.
+	// Mirror to the co-located listener (own-node delivery). Same funnel as the
+	// retry tee but a distinct target port the listener binds exclusively, and
+	// deliberately still DATA-only: this is a DELIVERY path, not a cache, so
+	// widening it changes what a co-located consumer receives rather than what
+	// can be repaired. It is disabled on every tier that runs egress-loop (the
+	// own-source SSM join carries own-node delivery there instead), so it is not
+	// on the path this teeable split was fixing. Revisit it with the same-edge
+	// delivery work, not here.
 	if e.mirror != nil && isData {
 		e.mirror.append(raw)
 	}
