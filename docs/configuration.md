@@ -106,8 +106,9 @@ shard-proxy \
 Ingress accepts the **open class set only**: BRC-12 / 124 / 128 transactions,
 framed or bare (an anchor is an ordinary transaction), and BRC-148 BEEF objects
 (submission records or FrameVer `0x09`). Privileged control-plane frames — block
-announce (BRC-131), coinbase (BRC-133), subtree data (BRC-132) — arriving on an
-ingress socket are **dropped** and counted (`bsp_privileged_frame_rejected_total`).
+announce (BRC-131), coinbase (BRC-133, deprecated), subtree data (BRC-132) —
+arriving on an ingress socket are **dropped** and counted
+(`bsp_privileged_frame_rejected_total`).
 
 | Socket | Flag | Accepts |
 |--------|------|---------|
@@ -147,6 +148,11 @@ allowlist and nothing to coordinate across domains.
 Scope and limits:
 - Applies to **block announces only**. Coinbase (BRC-133) and subtree data
   (BRC-132) carry no in-frame header, so they stay on the admission gate.
+  Standalone coinbase frames are deprecated: nothing on the push lanes
+  produces one (the coinbase travels inline in the BRC-144 block), and the
+  listener's default-on block-control gate drops any that arrive over the
+  fabric (`coinbase_legacy`). The message type is retained, not removed, for
+  a possible future split carriage of blocks and their coinbase.
 - Set a real `-min-pow-bits` floor in production: `0` only checks the header is
   self-consistent, which a forger satisfies trivially by claiming easy
   difficulty.

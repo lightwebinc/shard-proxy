@@ -68,9 +68,9 @@ the BRC-129 shard zone `0x0000`–`0x0FFF`) are defined in `shard-common/shard/c
 | `GroupSubtreeDataAnnounce` | 0xFFFB | FF05::B:FFFB (data-plane scope) | BRC-132 subtree data frames |
 | `GroupSubtreeGroupAnnounce` | 0xFFFC | FF05::B:FFFC (data-plane scope) | BRC-127 subtree group announcements |
 | `GroupBeacon` | 0xFFFD | FF05::B:FFFD (site) / FF0E::B:FFFD (global) | ADVERT beacon (BRC-126 discovery) + BRC-139 shard manifests |
-| `GroupBlockBroadcast` | 0xFFFE | FF05::B:FFFE (data-plane scope; FF0E::B:FFFE when deployed global) | BRC-131 block control + BRC-133 coinbase + BRC-134 anchor frames |
+| `GroupBlockBroadcast` | 0xFFFE | FF05::B:FFFE (data-plane scope; FF0E::B:FFFE when deployed global) | BRC-131 block control + BRC-133 coinbase (deprecated) + BRC-134 anchor frames |
 
-BRC-129 names global scope (FF0E) as the deployment posture for `GroupBlockBroadcast`, because block headers, coinbase, and anchor transactions must reach every subscriber across organisational boundaries. The implementation derives the address from the configured `-scope` like every other control group: a site-scoped deployment emits `FF05::B:FFFE`, and an inter-domain one sets `-scope global`.
+BRC-129 names global scope (FF0E) as the deployment posture for `GroupBlockBroadcast`, because block headers, the coinbase (inline in the block frame), and anchor transactions must reach every subscriber across organisational boundaries. The implementation derives the address from the configured `-scope` like every other control group: a site-scoped deployment emits `FF05::B:FFFE`, and an inter-domain one sets `-scope global`.
 
 Per BRC-129 zoning, shard group indices are bounded to `0x0000`–`0x0FFF` — `-shard-bits`
 is at most 12 for conformant deployments (the flag validator enforces `[1, 12]`) — so
@@ -107,7 +107,7 @@ Two `MsgType` values are defined (byte 7 of the header):
 | MsgType | Value | Payload |
 |---|---|---|
 | BlockAnnounce | 0x01 | 80-byte block header + CoinbaseTxID + subtree hashes |
-| CoinbaseTx | 0x02 | Raw serialised coinbase transaction |
+| CoinbaseTx | 0x02 | Raw serialised coinbase transaction. Deprecated (BRC-133): the push lane never produces it, since the coinbase travels inline in the BRC-144 body; the listener's default-on block-control gate drops one (`coinbase_legacy`). Retained and reserved so a future design could carry blocks and their coinbase separately on the fabric and recombine them at the edges |
 
 ## BRC-132 Subtree Data Frames (FrameVerV5)
 
@@ -282,7 +282,7 @@ Offset  Size  Align  Field          Value / notes
      0     4   —     Network magic  0xE3E1F3E8
      4     2   —     Protocol ver   0x02BF
      6     1   —     Frame version  0x04 (BRC-131)
-     7     1   —     MsgType        0x01 = BlockAnnounce, 0x02 = CoinbaseTx
+     7     1   —     MsgType        0x01 = BlockAnnounce, 0x02 = CoinbaseTx (deprecated, reserved)
      8    32   8B    ContentID      Block hash (Announce) or CoinbaseTxID (Coinbase)
     40     8   8B    HashKey        Stamped by proxy; XXH64(senderIPv6 ∥ 0xFFFE ∥ zeros)
     48     8   8B    SeqNum         Monotonic per (sender, 0xFFFE, zeros) flow; 0 = unset
