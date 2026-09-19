@@ -126,6 +126,9 @@ subscriber regardless of which shard their TxID would otherwise hash to. UDP wor
 
 `ProcessSubtreeData`:
 - Validates via `frame.DecodeSubtreeData`.
+- With `-verify-subtree-root` (default on), recomputes the merkle root from the
+  node hashes and drops the frame if it differs from `SubtreeID`, before the
+  ingress dedup claim. See [configuration](configuration.md#subtree-root-verification).
 - Stamps `HashKey` as `XXH64(senderIPv6 ∥ 0xFFFB ∥ subtreeID)` and `SeqNum` as a monotonic
   per-flow counter. The flow key incorporates `subtreeID` so each distinct subtree is
   sequenced independently.

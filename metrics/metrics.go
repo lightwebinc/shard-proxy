@@ -190,6 +190,7 @@ type Recorder struct {
 	beefFanoutTopics      metric.Int64Counter // admitted multi-topic frames, free|billable
 	beefFanoutBytes       metric.Int64Counter // amplified object bytes, free|billable
 	blockPoWRejected      metric.Int64Counter // block announces failing the PoW gate (cold)
+	subtreeRootChecks     metric.Int64Counter // by result (cold; -verify-subtree-root)
 	promTxidClaimLocalHit *promclient.CounterVec
 	promTxidClaimWon      *promclient.CounterVec
 	promTxidClaimLost     *promclient.CounterVec
@@ -568,6 +569,10 @@ func New(instanceID string, numWorkers int, otlpEndpoint string, otlpInterval ti
 		metric.WithDescription("BRC-131 block announces dropped by the proof-of-work gate (invalid header PoW or below the difficulty floor)")); err != nil {
 		return nil, err
 	}
+	if r.subtreeRootChecks, err = meter.Int64Counter("bsp_subtree_root_checks_total",
+		metric.WithDescription("BRC-132 subtree data frames checked by -verify-subtree-root, by result (ok, mismatch, malformed); mismatch and malformed are dropped")); err != nil {
+		return nil, err
+	}
 	if r.beefSubmissions, err = meter.Int64Counter("bsp_beef_submissions_total",
 		metric.WithDescription("BRC-148 BEEF submission records by admission result (ok, malformed, oversize, bad_marker, disabled)")); err != nil {
 		return nil, err
@@ -773,6 +778,14 @@ func (r *Recorder) PrivilegedFrameRejected(frameType string) {
 // gate — its header failed PoW or claimed a difficulty below the configured floor.
 func (r *Recorder) BlockPoWRejected() {
 	r.blockPoWRejected.Add(context.Background(), 1)
+}
+
+// SubtreeRootCheck records one -verify-subtree-root outcome (result: ok,
+// mismatch, malformed).
+func (r *Recorder) SubtreeRootCheck(result string) {
+	r.subtreeRootChecks.Add(context.Background(), 1, metric.WithAttributes(
+		attribute.String("result", result),
+	))
 }
 
 // BEEFSubmission records one BRC-148 submission-record admission outcome

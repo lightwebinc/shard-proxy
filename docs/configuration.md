@@ -19,6 +19,7 @@ as fallbacks; hard-coded defaults apply when neither is present.
 | `-require-ef` | `REQUIRE_EF` | `false` | **EF-native ingress**: reject raw BRC-12/BRC-124 transaction submissions; only Extended Format (BRC-30) is admitted. Applies to stamped frames too — `SeqNum` is sender-chosen and must not waive the EF posture. See [EF-native ingress](architecture.md#ef-native-ingress--require-ef) |
 | `-allow-stamped-ingress` | `ALLOW_STAMPED_INGRESS` | `false` | Admit framed BRC-124/BRC-128 input that already carries a SeqNum (another proxy's output). **Off by default**: an ingress proxy accepts submissions, not relay. Enable on a spine collect lane or relay hop. See [Stamped ingress](#stamped-ingress) |
 | `-verify-payload-hash` | `VERIFY_PAYLOAD_HASH` | `false` | Verify the canonical TxID of **framed** BRC-124/BRC-128 input against its payload and drop mismatches before the ingress dedup claim. Bare submissions are unaffected (the proxy derives their TxID itself). Costs one SHA256d per framed transaction. See [Payload-hash verification](#payload-hash-verification) |
+| `-verify-subtree-root` | `VERIFY_SUBTREE_ROOT` | `true` | Recompute a BRC-132 subtree's merkle root from its node hashes and drop the frame if it does not match its SubtreeID, before the ingress dedup claim. **Default ON**. Stamped frames are not exempt. See [Subtree root verification](#subtree-root-verification) |
 | `-min-pow-bits` | `MIN_POW_BITS` | `0` | PoW difficulty floor in Bitcoin compact `nBits` form (e.g. `0x1d00ffff`); `0` = header self-consistency only (weak) |
 | `-iface` | `MULTICAST_IF` | `eth0` | Comma-separated NIC names for multicast egress |
 | `-egress-port` | `EGRESS_PORT` | `9001` | Destination UDP port for multicast groups |
@@ -184,7 +185,7 @@ Enable it only where the lane really does carry fabric traffic:
 | A relay hop forwarding another proxy's output | on |
 
 Enabling it does not waive any other gate: a stamped frame admitted this way is
-still subject to `-require-ef` and `-verify-payload-hash`.
+still subject to `-require-ef`, `-verify-payload-hash` and `-verify-subtree-root`.
 
 **Gap-injection load rigs need this flag.** `subtx-generator` in unicast mode
 leaves `SeqNum` zero *unless* gap injection is active, in which case it stamps
@@ -286,6 +287,58 @@ The listener implements the identical check behind its own
 `-verify-payload-hash`, including the exactly-one-transaction bound, and applies
 it to BRC-130 reassembled payloads too. See `shard-listener`
 `docs/configuration.md`.
+
+---
+
+## Subtree root verification
+
+`-verify-subtree-root` recomputes each BRC-132 subtree's merkle root from its
+node hashes and forwards the frame only if the result equals its `SubtreeID`.
+**On by default.** It runs in `ProcessSubtreeData`, so it covers the subtree
+push lane (`-subtree-listen-port`, where every BRC-143 object is reframed into
+BRC-132) and any framed BRC-132 on a privileged socket.
+
+The computation is Teranode's (`go-subtree`'s `BuildMerkleTreeStoreFromBytes`):
+a level with an odd count pairs its last hash with itself, and a one-node
+subtree is its own root. Both `MsgType` strides are handled.
+
+| Result | Effect | Counter |
+|--------|--------|---------|
+| Root matches | Forwarded | `bsp_subtree_root_checks_total{result="ok"}` |
+| Root differs | Dropped, logged at WARN | `bsp_subtree_root_checks_total{result="mismatch"}` |
+| No nodes, or fewer node bytes than `NodeCount` claims | Dropped, logged at WARN | `bsp_subtree_root_checks_total{result="malformed"}` |
+
+The check runs **before the ingress dedup claim**, so a bad copy of a subtree
+never claims its root ahead of the good copy. Stamped frames are not exempt, for
+the reason given under [Payload-hash verification](#scope-and-exemptions): a
+relay hop with the flag on checks again. A spine may turn it off where every
+lane it collects from is a checking proxy.
+
+What it proves, and what it does not:
+
+- It proves the node list is the one the root names: nothing added, removed,
+  altered or reordered.
+- It validates no transaction; the consuming node does that.
+- It says nothing about the per-node fee and size of a FullNodes (`0x02`)
+  payload. The root commits to the hashes only.
+
+### Cost
+
+The cost tracks the transaction rate, not the subtree rate: about 1.2 to 1.3 µs
+of one core per node on a Xeon E5-2699 v3 (Haswell, no SHA-NI). Levels of at
+least 16,384 parents are split across up to four goroutines, so the added
+latency per subtree is:
+
+| Nodes | Verify time |
+|------:|------------:|
+| 1,024 | 1.3 ms |
+| 16,384 | 20 ms |
+| 131,072 | 71 ms |
+| 1,048,576 | 0.40 s |
+
+The push lane already holds the whole object before it forwards, so nothing
+else is added. `subtx-generator`'s `send-subtree-push` and `send-subtree-data`
+compute real roots; older builds of them produce subtrees this gate drops.
 
 ---
 

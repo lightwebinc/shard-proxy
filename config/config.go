@@ -89,6 +89,11 @@ type Config struct {
 	// forwarder.Forwarder.SetAllowStampedIngress.
 	AllowStampedIngress bool
 
+	// VerifySubtreeRoot drops a BRC-132 subtree data frame whose node hashes
+	// do not hash to its SubtreeID, before the ingress dedup claim. ON by
+	// default. See forwarder.Forwarder.SetVerifySubtreeRoot.
+	VerifySubtreeRoot bool
+
 	// VerifyPayloadHash gates framed BRC-124/BRC-128 input on the canonical
 	// TxID of its payload, dropping mismatches before the ingress dedup claim
 	// and before group derivation. Off by default; costs one SHA256d per
@@ -239,6 +244,8 @@ func Load() (*Config, error) {
 		"EF-native ingress: reject raw BRC-12/BRC-124 transaction submissions; only Extended Format (BRC-30) is admitted (relayed frames unaffected)")
 	flag.BoolVar(&c.AllowStampedIngress, "allow-stamped-ingress", envBool("ALLOW_STAMPED_INGRESS", false),
 		"admit framed BRC-124/BRC-128 input that already carries a SeqNum (another proxy's output). Off by default: an ingress proxy accepts submissions, not relay. Enable on a spine collect lane or relay hop")
+	flag.BoolVar(&c.VerifySubtreeRoot, "verify-subtree-root", envBool("VERIFY_SUBTREE_ROOT", true),
+		"verify that a BRC-132 subtree's node hashes hash to its root and drop mismatches before ingress dedup (costs about 1-1.5 us of one core per transaction; stamped frames are not exempt)")
 	flag.BoolVar(&c.VerifyPayloadHash, "verify-payload-hash", envBool("VERIFY_PAYLOAD_HASH", false),
 		"verify the canonical TxID of framed BRC-124/BRC-128 input against its payload and drop mismatches before ingress dedup (bare submissions unaffected; costs one SHA256d per framed tx)")
 	minPoWBits := flag.String("min-pow-bits", envStr("MIN_POW_BITS", "0"),

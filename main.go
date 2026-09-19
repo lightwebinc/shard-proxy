@@ -190,12 +190,16 @@ func main() {
 	fwd.SetRequireEF(cfg.RequireEF)
 	fwd.SetVerifyPayloadHash(cfg.VerifyPayloadHash)
 	fwd.SetAllowStampedIngress(cfg.AllowStampedIngress)
+	fwd.SetVerifySubtreeRoot(cfg.VerifySubtreeRoot)
 	fwd.SetBEEF(beefEngine, cfg.BEEFMaxObjectBytes)
 	if cfg.RequireEF {
 		slog.Info("EF-native ingress enabled: raw BRC-12/BRC-124 transaction submissions rejected")
 	}
 	if cfg.AllowStampedIngress {
 		slog.Info("stamped ingress ALLOWED: framed BRC-124/BRC-128 input carrying a SeqNum is admitted — correct for a spine collect lane or relay hop, wrong for a public submission lane")
+	}
+	if cfg.VerifySubtreeRoot {
+		slog.Info("subtree root verification enabled: a BRC-132 subtree whose nodes do not hash to its root is dropped before ingress dedup")
 	}
 	if cfg.VerifyPayloadHash {
 		slog.Info("payload-hash verification enabled: framed BRC-124/BRC-128 input with a TxID that does not match its payload is dropped before ingress dedup")

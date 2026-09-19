@@ -42,6 +42,7 @@ package forwarder
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"log/slog"
@@ -205,6 +206,12 @@ type Forwarder struct {
 	// See SetVerifyPayloadHash.
 	verifyPayloadHash bool
 
+	// verifySubtreeRoot drops a BRC-132 subtree data frame whose node hashes
+	// do not hash to its SubtreeID, before the ingress dedup claim. Off by
+	// default. Like verifyPayloadHash it exempts no stamped frame. See
+	// SetVerifySubtreeRoot.
+	verifySubtreeRoot bool
+
 	// groupAddrs caches the multicast destination address by group index. The
 	// address is a pure function of (mcPrefix, mcGroupID, idx, egressPort) —
 	// invariant across resharding/bridging, which change the index a txid maps
@@ -355,6 +362,17 @@ func (fw *Forwarder) SetRequireEF(require bool) { fw.requireEF = require }
 // This does not exempt anything from the other gates. A stamped frame admitted
 // here is still subject to -require-ef and -verify-payload-hash.
 func (fw *Forwarder) SetAllowStampedIngress(allow bool) { fw.allowStampedIngress = allow }
+
+// SetVerifySubtreeRoot enables merkle-root verification of BRC-132 subtree
+// data: a frame is forwarded only if its node hashes hash to its SubtreeID.
+// A failing frame is dropped before the ingress dedup claim, so a malformed
+// copy is never multicast and cannot claim the root ahead of a good one. Off
+// by default. Stamped frames are not exempt (see SetVerifyPayloadHash for
+// why), so a relay hop with this on checks again; a spine may turn it off
+// where every lane it collects from is a checking proxy. It proves the node
+// list, not the transactions, and not the per-node fee or size of a
+// FullNodes payload. Must be called before any worker starts.
+func (fw *Forwarder) SetVerifySubtreeRoot(verify bool) { fw.verifySubtreeRoot = verify }
 
 // SetVerifyPayloadHash enables canonical-TxID verification of framed
 // BRC-124/BRC-128 (V2) input: the frame's TxID must equal the transaction id
@@ -1305,6 +1323,26 @@ func (fw *Forwarder) ProcessSubtreeData(egr *Egress, raw []byte, src net.Addr, w
 			fw.rec.PacketDropped(egr.targets[0].Iface.Name, workerID, "decode_error")
 		}
 		return
+	}
+
+	// Merkle-root gate, ahead of the dedup claim so a bad copy cannot claim
+	// the root.
+	if fw.verifySubtreeRoot {
+		if err := verifySubtreePayload(sf.SubtreeID, sf.MsgType, sf.Payload); err != nil {
+			result := "mismatch"
+			if errors.Is(err, errSubtreeMalformed) {
+				result = "malformed"
+			}
+			if fw.rec != nil {
+				fw.rec.SubtreeRootCheck(result)
+			}
+			fw.log.Warn("subtree dropped: root verification failed", "result", result,
+				"subtree_id_prefix", fmt.Sprintf("%x", sf.SubtreeID[:8]), "src", src)
+			return
+		}
+		if fw.rec != nil {
+			fw.rec.SubtreeRootCheck("ok")
+		}
 	}
 
 	// Ingress TxID dedup gate for BRC-132 subtree data frames. The SubtreeID
