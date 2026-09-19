@@ -24,6 +24,7 @@
 package worker
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -215,11 +216,23 @@ func (oi *ObjectIngress) handleConn(conn net.Conn, egr *forwarder.Egress) {
 
 	rd := objfmt.NewReader(conn, oi.class)
 	rd.SetMaxObject(oi.maxObject)
+	// The BEEF lane's records are bounded by the submitter's object bound, not
+	// the push-object ceiling sized for subtrees (DefaultMaxObjectBytes).
+	if oi.class == objfmt.ClassBEEF {
+		if bound := oi.fwd.BEEFRecordBound(remote); bound > 0 {
+			rd.SetMaxObject(bound)
+		}
+	}
 
 	for {
 		obj, err := rd.Next()
 		if err != nil {
-			if err != io.EOF && !isClosedErr(err) {
+			if oi.class == objfmt.ClassBEEF && errors.Is(err, objfmt.ErrObjectTooLarge) {
+				oi.log.Warn("BEEF record exceeds the object bound; closing", "remote", remote, "err", err)
+				if oi.rec != nil {
+					oi.rec.BEEFSubmission("oversize")
+				}
+			} else if err != io.EOF && !isClosedErr(err) {
 				oi.log.Debug("object read error; closing connection", "remote", remote, "err", err)
 			}
 			return

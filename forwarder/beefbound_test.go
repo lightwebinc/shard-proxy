@@ -45,3 +45,26 @@ func TestBEEFObjectBoundPerSource(t *testing.T) {
 		t.Errorf("policy tightened the bound to %d — must never go below the operator floor", got)
 	}
 }
+
+// The stream-read bound follows the per-source object bound, plus room for the
+// largest record envelope, so an authenticated submitter's larger objects are
+// still readable while an open one is cut off near its own bound.
+func TestBEEFRecordBoundPerSource(t *testing.T) {
+	if got := (&Forwarder{}).BEEFRecordBound(&net.UDPAddr{}); got != 0 {
+		t.Errorf("no object bound: record bound = %d, want 0 (caller keeps its ceiling)", got)
+	}
+
+	fw := &Forwarder{beefMaxObject: 1 << 20}
+	auth := net.ParseIP("fd00:57::5")
+	fw.SetBEEFSubmitPolicy(&boundPolicy{auth: auth, lift: 8 << 20})
+
+	if got := fw.BEEFRecordBound(&net.TCPAddr{IP: net.ParseIP("2001:db8::9")}); got != 1<<20+beefRecordMaxEnvelope {
+		t.Errorf("open record bound = %d, want %d", got, 1<<20+beefRecordMaxEnvelope)
+	}
+	if got := fw.BEEFRecordBound(&net.TCPAddr{IP: auth}); got != 8<<20+beefRecordMaxEnvelope {
+		t.Errorf("authenticated record bound = %d, want %d", got, 8<<20+beefRecordMaxEnvelope)
+	}
+	if beefRecordMaxEnvelope != 983 {
+		t.Errorf("envelope = %d, want 983 (4 + 15 x 65 + 4)", beefRecordMaxEnvelope)
+	}
+}

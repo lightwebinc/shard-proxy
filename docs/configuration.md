@@ -707,6 +707,13 @@ and objects exceeding `-frag-mtu` fragment via BRC-130 with `OrigFrameVer 0x09`.
   object bound for that source (never below `-beef-max-object-bytes`).
 - **Submission results** (`bsp_beef_submissions_total{result}`): `ok`,
   `disabled`, `malformed`, `oversize`, `bad_marker`, `multi_topic`.
+- **Oversize records over TCP.** Both TCP paths (the shared port and
+  `-beef-listen-port`) read a record under the submitter's object bound plus
+  the largest record envelope (983 bytes). A record that fits that allowance is
+  read whole, rejected as `oversize`, and the stream continues. A record that
+  does not is never buffered past it: the proxy counts `oversize`, logs a
+  warning, and closes the connection, since resyncing would mean reading the
+  rest of the object.
 - **Pre-framed `0x09` input** must meet the same conformance as a record, on
   every acceptance path and before the dedup claim: object bound
   (`beef_oversize`), non-zero TopicID (`beef_no_topic`), BEEF marker

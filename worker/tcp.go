@@ -607,10 +607,22 @@ func (ti *TCPIngress) handleConn(conn net.Conn, egr *forwarder.Egress) {
 // BEEF is an open class, so the socket's IngressClass admits it regardless.
 func (ti *TCPIngress) handleBEEFConn(br *bufio.Reader, remote net.Addr, egr *forwarder.Egress, bat *tcpBatcher, admit AdmitFunc) {
 	rd := objfmt.NewReader(br, objfmt.ClassBEEF)
+	// Bound the read at this submitter's object bound. Left at the reader's
+	// default (objfmt.DefaultMaxObject, 64 MiB) the connection buffers an
+	// oversize object whole before SubmitBEEF rejects it at a far smaller bound.
+	if bound := ti.fwd.BEEFRecordBound(remote); bound > 0 {
+		rd.SetMaxObject(bound)
+	}
 	for {
 		rec, err := rd.Next()
 		if err != nil {
-			if err != io.EOF && !isClosedErr(err) {
+			if errors.Is(err, objfmt.ErrObjectTooLarge) {
+				// Resyncing would mean reading the rest of the object, so close.
+				ti.log.Warn("BEEF record exceeds the object bound; closing", "remote", remote, "err", err)
+				if ti.rec != nil {
+					ti.rec.BEEFSubmission("oversize")
+				}
+			} else if err != io.EOF && !isClosedErr(err) {
 				ti.log.Debug("beef record read error; closing connection", "remote", remote, "err", err)
 			}
 			return

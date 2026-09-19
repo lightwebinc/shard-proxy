@@ -98,6 +98,24 @@ func (fw *Forwarder) beefObjectBoundFor(src net.Addr) int {
 	return base
 }
 
+// beefRecordMaxEnvelope is the largest BRC-149 submission-record envelope the
+// grammar allows around its object: tag, RecordVer, TopicCount, a full topic
+// list, and ObjectLen.
+const beefRecordMaxEnvelope = 2 + 1 + 1 + objfmt.BEEFMaxTopics*(1+objfmt.BEEFMaxTopicLen) + 4
+
+// BEEFRecordBound returns how many bytes a stream reader may buffer for one
+// submission record from src: that submitter's object bound plus the largest
+// envelope. A record the reader cannot delimit within this many bytes carries
+// an object SubmitBEEF would reject anyway, so the reader stops rather than
+// buffering it. 0 = no bound configured (the caller keeps its own ceiling).
+func (fw *Forwarder) BEEFRecordBound(src net.Addr) int {
+	obj := fw.beefObjectBoundFor(src)
+	if obj <= 0 {
+		return 0
+	}
+	return obj + beefRecordMaxEnvelope
+}
+
 // srcIPOf extracts the bare IP from a UDP/TCP source address (nil if unknown).
 func srcIPOf(src net.Addr) net.IP {
 	switch a := src.(type) {
