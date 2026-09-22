@@ -26,14 +26,14 @@ jobs:
     name: govulncheck (dagger)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: shard-proxy
 
       # ci/main.go mounts shard-common as a SIBLING (-common=../shard-common) to
       # satisfy the go.mod replace. A scheduled run has no feature branch to
       # match, so it always takes main.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: lightwebinc/shard-common
           ref: main
