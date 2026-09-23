@@ -577,7 +577,7 @@ func New(instanceID string, numWorkers int, otlpEndpoint string, otlpInterval ti
 		return nil, err
 	}
 	if r.beefTopics, err = meter.Int64Counter("bsp_beef_topics_total",
-		metric.WithDescription("Topic names on admitted BRC-149 submission records, by role: deliverable (matched at the edge; 1 on the open path, up to the operator's cap on the authenticated path) or label (carried to the subscriber, never matched, never billed)")); err != nil {
+		metric.WithDescription("Topic names on admitted BRC-149 submission records, by topic_role: deliverable (matched at the edge; 1 on the open path, up to the operator's cap on the authenticated path) or label (carried to the subscriber, never matched, never billed)")); err != nil {
 		return nil, err
 	}
 	// TxidClaim* are per-packet when ingress dedup is on; direct prometheus
@@ -797,14 +797,20 @@ func (r *Recorder) BEEFSubmission(result string) {
 // deliverable is how many of the leading names the frame's DeliverCount
 // makes matchable, named is the record's TopicCount. The difference is
 // labels: names the subscriber receives in the payload and nothing else.
+//
+// The dimension is topic_role, NOT role: the site-aggregator stamps every
+// federated sample with the site label set (fabric, geo, location, node,
+// region, role), so a metric carrying its own "role" makes the whole
+// /federate payload invalid ("label name role is not unique") and takes the
+// site's ENTIRE scrape down, not just this series.
 func (r *Recorder) BEEFTopics(named, deliverable int) {
 	if r == nil || r.beefTopics == nil {
 		return
 	}
 	ctx := context.Background()
-	r.beefTopics.Add(ctx, int64(deliverable), metric.WithAttributes(attribute.String("role", "deliverable")))
+	r.beefTopics.Add(ctx, int64(deliverable), metric.WithAttributes(attribute.String("topic_role", "deliverable")))
 	if labels := named - deliverable; labels > 0 {
-		r.beefTopics.Add(ctx, int64(labels), metric.WithAttributes(attribute.String("role", "label")))
+		r.beefTopics.Add(ctx, int64(labels), metric.WithAttributes(attribute.String("topic_role", "label")))
 	}
 }
 
