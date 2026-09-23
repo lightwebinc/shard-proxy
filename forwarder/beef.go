@@ -385,9 +385,16 @@ func (fw *Forwarder) ProcessBEEF(egr *Egress, raw []byte, src net.Addr, workerID
 
 // fragmentBEEF splits an oversized BEEF object into BRC-130 fragments
 // (OrigFrameVer 0x09). ContentID rides the fragment TxID slot (it is the
-// BRC-130 reassembly key and SHA-256d verification hash by construction) and
-// TopicID rides the SubtreeID slot, so both identifiers appear in every
-// fragment; flow stamping uses the zero ingredient like whole frames.
+// BRC-130 reassembly key and SHA-256d verification hash by construction),
+// TopicID rides the SubtreeID slot, and DeliverCount rides byte 7 (the
+// fragment header's MsgType slot, which exists to carry byte 7 through
+// fragmentation), so all three identifiers appear in every fragment; flow
+// stamping uses the zero ingredient like whole frames.
+//
+// Byte 7 matters here: without it a fragmented record reassembles with
+// DeliverCount 0, which reads as one deliverable topic, so an object large
+// enough to fragment would silently reach only its first topic's
+// subscribers while a small one reached all of them.
 func (fw *Forwarder) fragmentBEEF(egr *Egress, bf *frame.BEEFFrame, ip [16]byte, groupIdx uint32, workerID int) {
 	payload := bf.Payload
 	origLen := uint32(len(payload))
@@ -443,6 +450,9 @@ func (fw *Forwarder) fragmentBEEF(egr *Egress, bf *frame.BEEFFrame, ip [16]byte,
 			egr.pool.Put(bufPtr)
 			continue
 		}
+		// Carry DeliverCount through the fragment header's byte 7, the same
+		// slot the block and subtree paths use for their MsgType.
+		buf[7] = bf.DeliverCount
 		egr.EnqueueDataPooled(buf[:n], *dst, groupIdx, workerID, bufPtr)
 	}
 }

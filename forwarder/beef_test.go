@@ -394,6 +394,38 @@ func TestProcessBEEF_Fragmentation(t *testing.T) {
 	}
 }
 
+// TestFragmentBEEF_CarriesDeliverCount is the silent-under-delivery
+// regression: byte 7 rides the fragment header's MsgType slot, so a record
+// big enough to fragment reassembles with the same deliverable prefix as a
+// small one. Without it a 3-topic record over the MTU reaches only its
+// first topic's subscribers, and nothing counts a drop.
+func TestFragmentBEEF_CarriesDeliverCount(t *testing.T) {
+	fw, _ := makeBEEFForwarder(t)
+	fw.SetFragMTU(1280)
+	fw.SetBEEFSubmitPolicy(&boundPolicy{auth: net.ParseIP("::1"), deliver: 3})
+	src := &net.UDPAddr{IP: net.ParseIP("::1"), Port: 12345}
+	conn, _ := openLoopbackUDP(t)
+	egr := makeEgress(t, fw, conn)
+
+	big := make([]byte, 4096)
+	copy(big, []byte{0x01, 0x00, 0xBE, 0xEF})
+	fw.SubmitBEEF(egr, buildBEEFRecordBytes(t, []string{"tm_a", "tm_b", "tm_c"}, big), src, 0)
+
+	frames, _ := captureEnqueued(egr)
+	if len(frames) < 2 {
+		t.Fatalf("enqueued %d datagrams, want >=2 fragments", len(frames))
+	}
+	for i, raw := range frames {
+		ff, err := frame.DecodeFragment(raw)
+		if err != nil {
+			t.Fatalf("fragment %d: %v", i, err)
+		}
+		if ff.MsgType != 3 {
+			t.Fatalf("fragment %d: byte 7 = %d, want the DeliverCount 3", i, ff.MsgType)
+		}
+	}
+}
+
 // The object bound MUST hold on the pre-framed path too: without it, framing
 // the object as FrameVer 0x09 bypasses -beef-max-object-bytes entirely
 // (BRC-149 makes the bound an ingress MUST, not a per-grammar nicety).
