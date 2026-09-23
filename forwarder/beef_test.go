@@ -1,6 +1,7 @@
 package forwarder
 
 import (
+	"bytes"
 	"fmt"
 	"net"
 	"testing"
@@ -97,9 +98,8 @@ func TestDispatchClass_BEEFLaneRejectsOthers(t *testing.T) {
 }
 
 // TestSubmitBEEF_SingleTopic proves one single-topic record emits one stamped
-// frame addressed into the 0x1000 plane band, carrying the object's ContentID.
-// Multi-topic expansion requires an authenticated submit policy; the OSS admission gate
-// rejects records naming >1 topic (see TestSubmitBEEF_Rejects/"multi_topic").
+// frame addressed into the 0x1000 plane band, carrying the record verbatim as
+// its payload and the record's ContentID.
 func TestSubmitBEEF_SingleTopic(t *testing.T) {
 	fw, pe := makeBEEFForwarder(t)
 	src := &net.UDPAddr{IP: net.ParseIP("::1"), Port: 12345}
@@ -107,7 +107,8 @@ func TestSubmitBEEF_SingleTopic(t *testing.T) {
 	egr := makeEgress(t, fw, conn)
 
 	topic := "tm_alpha"
-	fw.SubmitBEEF(egr, buildBEEFRecordBytes(t, []string{topic}, beefTestObj), src, 0)
+	rec := buildBEEFRecordBytes(t, []string{topic}, beefTestObj)
+	fw.SubmitBEEF(egr, rec, src, 0)
 
 	frames, _ := captureEnqueued(egr)
 	if len(frames) != 1 {
@@ -117,8 +118,14 @@ func TestSubmitBEEF_SingleTopic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if bf.ContentID != objfmt.ContentID(beefTestObj) {
-		t.Errorf("ContentID mismatch")
+	if !bytes.Equal(bf.Payload, rec) {
+		t.Errorf("payload is not the submission record verbatim")
+	}
+	if bf.ContentID != objfmt.ContentID(rec) {
+		t.Errorf("ContentID mismatch (must be over the record payload)")
+	}
+	if bf.Deliverable() != 1 {
+		t.Errorf("DeliverCount = %d, want 1", bf.DeliverCount)
 	}
 	if bf.TopicID != objfmt.TopicID(topic) {
 		t.Errorf("TopicID mismatch")
@@ -146,10 +153,9 @@ func TestSubmitBEEF_Rejects(t *testing.T) {
 		rec      []byte
 		maxBytes int
 	}{
-		"malformed":   {badVer, 1 << 20},
-		"bad_marker":  {badMarker, 1 << 20},
-		"oversize":    {good, 4},
-		"multi_topic": {buildBEEFRecordBytes(t, []string{"tm_x", "tm_y"}, beefTestObj), 1 << 20},
+		"malformed":  {badVer, 1 << 20},
+		"bad_marker": {badMarker, 1 << 20},
+		"oversize":   {good, 4},
 	}
 	for name, c := range cases {
 		fw, _ := makeBEEFForwarder(t)
@@ -160,6 +166,98 @@ func TestSubmitBEEF_Rejects(t *testing.T) {
 		if got := countEnqueued(egr); got != 0 {
 			t.Errorf("%s: enqueued %d, want 0", name, got)
 		}
+	}
+}
+
+// TestSubmitBEEF_MultiTopicOpenPath proves a record naming several topics is
+// ADMITTED on the open path as ONE frame: the first topic is the shard key
+// and the only deliverable one, every name rides in the payload, and no
+// fan-out happens. A policy lifts the deliverable count for a source it
+// knows, clamped to the record, and never past the wire ceiling.
+func TestSubmitBEEF_MultiTopicOpenPath(t *testing.T) {
+	names := []string{"tm_x", "tm_y", "tm_z", "tm_w", "tm_v"}
+	rec := buildBEEFRecordBytes(t, names, beefTestObj)
+	src := &net.UDPAddr{IP: net.ParseIP("::1"), Port: 12345}
+
+	fw, _ := makeBEEFForwarder(t)
+	conn, _ := openLoopbackUDP(t)
+	egr := makeEgress(t, fw, conn)
+	fw.SubmitBEEF(egr, rec, src, 0)
+	frames, _ := captureEnqueued(egr)
+	if len(frames) != 1 {
+		t.Fatalf("open path enqueued %d frames for a 5-topic record, want exactly 1", len(frames))
+	}
+	bf, err := frame.DecodeBEEF(frames[0])
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if bf.TopicID != objfmt.TopicID("tm_x") {
+		t.Error("shard key is not the first topic")
+	}
+	if ids := objfmt.BEEFDeliverableTopicIDs(bf); len(ids) != 1 {
+		t.Fatalf("open path deliverable = %d topics, want 1", len(ids))
+	}
+	if _, topics, _ := objfmt.SplitBEEFPayload(bf.Payload); len(topics) != 5 {
+		t.Fatalf("payload carries %d names, want all 5", len(topics))
+	}
+
+	// An authenticated source, per the policy, delivers its cap of 3.
+	fw.SetBEEFSubmitPolicy(&boundPolicy{auth: net.ParseIP("::1"), lift: 0, deliver: 3})
+	egr2 := makeEgress(t, fw, conn)
+	fw.SubmitBEEF(egr2, rec, src, 0)
+	frames, _ = captureEnqueued(egr2)
+	if len(frames) != 1 {
+		t.Fatalf("authenticated path enqueued %d frames, want exactly 1 (no expansion)", len(frames))
+	}
+	bf, _ = frame.DecodeBEEF(frames[0])
+	if ids := objfmt.BEEFDeliverableTopicIDs(bf); len(ids) != 3 || ids[2] != objfmt.TopicID("tm_z") {
+		t.Fatalf("authenticated deliverable = %d topics, want the first 3", len(ids))
+	}
+
+	// A policy answer above the record's count clamps to the record.
+	fw.SetBEEFSubmitPolicy(&boundPolicy{auth: net.ParseIP("::1"), deliver: 40})
+	egr3 := makeEgress(t, fw, conn)
+	fw.SubmitBEEF(egr3, buildBEEFRecordBytes(t, names[:2], beefTestObj), src, 0)
+	frames, _ = captureEnqueued(egr3)
+	bf, _ = frame.DecodeBEEF(frames[0])
+	if bf.Deliverable() != 2 {
+		t.Fatalf("DeliverCount = %d, want clamped to the record's 2", bf.DeliverCount)
+	}
+}
+
+// TestProcessBEEF_PreFramedDeliverCountIsNotThePublishers proves a publisher
+// pre-framing its own 0x09 cannot stamp fan-out: the ingress overwrites
+// byte 7 from the policy, and a record whose header TopicID is not its first
+// topic is dropped before the dedup claim.
+func TestProcessBEEF_PreFramedDeliverCountIsNotThePublishers(t *testing.T) {
+	names := []string{"tm_x", "tm_y", "tm_z"}
+	rec := buildBEEFRecordBytes(t, names, beefTestObj)
+	src := &net.UDPAddr{IP: net.ParseIP("::1"), Port: 12345}
+
+	fw, _ := makeBEEFForwarder(t)
+	conn, _ := openLoopbackUDP(t)
+	egr := makeEgress(t, fw, conn)
+	raw, err := objfmt.BEEFMulticastRecord(rec, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fw.ProcessBEEF(egr, raw, src, 0)
+	frames, _ := captureEnqueued(egr)
+	if len(frames) != 1 {
+		t.Fatalf("enqueued %d, want 1", len(frames))
+	}
+	if bf, _ := frame.DecodeBEEF(frames[0]); bf.Deliverable() != 1 {
+		t.Fatalf("open ingress forwarded a publisher-stamped DeliverCount %d, want 1", bf.DeliverCount)
+	}
+
+	// Header TopicID disagreeing with topics[0] is a conformance drop.
+	raw, _ = objfmt.BEEFMulticastRecord(rec, 1)
+	wrong := objfmt.TopicID("tm_y")
+	copy(raw[56:88], wrong[:])
+	egr2 := makeEgress(t, fw, conn)
+	fw.ProcessBEEF(egr2, raw, src, 0)
+	if got := countEnqueued(egr2); got != 0 {
+		t.Fatalf("mismatched header TopicID enqueued %d, want 0", got)
 	}
 }
 
@@ -236,9 +334,9 @@ func TestProcessBEEF_PairDedup(t *testing.T) {
 	src := &net.UDPAddr{IP: net.ParseIP("::1"), Port: 12345}
 	conn, _ := openLoopbackUDP(t)
 
-	// The same object submitted to two DIFFERENT topics as separate single-topic
-	// records (the OSS gate caps each record at one topic) are distinct
-	// (ContentID, TopicID) pairs — neither suppresses the other.
+	// The same object submitted to two DIFFERENT topics as separate
+	// single-topic records are distinct (ContentID, TopicID) pairs — neither
+	// suppresses the other.
 	egrA := makeEgress(t, fw, conn)
 	fw.SubmitBEEF(egrA, buildBEEFRecordBytes(t, []string{"tm_a"}, beefTestObj), src, 0)
 	if got := countEnqueued(egrA); got != 1 {

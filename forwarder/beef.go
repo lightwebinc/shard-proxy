@@ -1,15 +1,17 @@
-// BRC-148 BEEF object plane ingress: submission-record expansion and the
+// BRC-148 BEEF object plane ingress: submission-record admission and the
 // FrameVer 0x09 process path.
 //
 // BEEF is an open ingress class (bounded, election-scoped amplification —
-// each frame delivers to a single topical group), so records and framed 0x09
+// one record is one frame at any topic count), so records and framed 0x09
 // input are admitted on the public tx port as well as the optional dedicated
-// lane. The forwarder expands one submission record into one frame per
-// submitted topic, claims ingress dedup per (ContentID, TopicID) pair, and
-// stamps HashKey/SeqNum with the domain-tagged group index and a ZERO
-// 32-byte ingredient — the spec excludes TopicID from the flow key so
-// retransmission state stays bounded by groups × sources, independent of
-// topic count.
+// lane. The forwarder carries one submission record as ONE frame whose
+// payload is the record verbatim (every name reaches the subscriber) and
+// whose DeliverCount says how many leading names are deliverable — 1 on the
+// open path, the policy's cap on an authenticated path — claims ingress
+// dedup per (ContentID, TopicID) pair, and stamps HashKey/SeqNum with the
+// domain-tagged group index and a ZERO 32-byte ingredient — the spec
+// excludes TopicID from the flow key so retransmission state stays bounded
+// by groups × sources, independent of topic count.
 
 package forwarder
 
@@ -43,9 +45,10 @@ func (fw *Forwarder) SetBEEF(pe *shard.PlaneEngine, maxObjectBytes int) {
 }
 
 // beefClaimKey derives the ingress-dedup claim key for one emitted BEEF
-// frame: SHA-256(ContentID ∥ TopicID). Keying the pair — never the bare
-// ContentID — keeps a multi-topic submission's sibling emissions and a later
-// re-submission of the same object to a new topic from being suppressed.
+// frame: SHA-256(ContentID ∥ TopicID). ContentID is over the payload, so the
+// same object under a different label set is a new submission; keying the
+// pair keeps a later re-submission to a new first topic from being
+// suppressed as well.
 func beefClaimKey(contentID, topicID [32]byte) [32]byte {
 	h := sha256.New()
 	h.Write(contentID[:])
@@ -55,21 +58,20 @@ func beefClaimKey(contentID, topicID [32]byte) [32]byte {
 	return out
 }
 
-// BEEFSubmitPolicy extends submission admission beyond the OSS stance. The
-// OSS default (nil policy) admits TopicCount == 1 only — multi-topic fan-out
-// (one object → N topic frames, up-to-15× amplification) is an authenticated
-// capability per BRC-149 §Fan-out admission, and the open ingress has no
-// identity to hang it on. A downstream build installs a policy that decides
-// per SOURCE (e.g. consumer-tunnel STE ranges) and observes each admitted
-// fan-out for accounting (first-N-free overage is the caller's concern; the
-// forwarder reports what happened, it does not price it).
+// BEEFSubmitPolicy extends submission admission beyond the OSS stance. A
+// record names 1..15 topics on every path and is never rejected for its
+// count; what differs per path is how many of its leading names are
+// DELIVERABLE (matched by delivery edges) rather than labels the subscriber
+// merely receives. The OSS default (nil policy) delivers the first topic
+// only — the open ingress has no identity to hang more on, and one
+// deliverable topic per record is what keeps the open path free of
+// amplification. A downstream build installs a policy that decides per
+// SOURCE (e.g. consumer-tunnel STE ranges) up to its cap.
 type BEEFSubmitPolicy interface {
-	// AdmitTopics reports whether src may submit a record naming n topics
-	// (n ≥ 2; single-topic records are always admitted).
-	AdmitTopics(src net.IP, n int) bool
-	// OnFanout observes one admitted multi-topic record: the submitter, the
-	// number of topic frames emitted, and the object's byte length.
-	OnFanout(src net.IP, topics, objectBytes int)
+	// DeliverCount returns how many of the leading n topics a record from src
+	// may deliver. The forwarder clamps the answer to [1, n]; there is no
+	// reject.
+	DeliverCount(src net.IP, n int) int
 	// MaxObjectBytes returns a per-source object bound overriding the operator's
 	// open-ingress bound (0 = no override). Authenticated sources may carry a
 	// larger allowance than the open path — identity makes abuse accountable
@@ -79,8 +81,8 @@ type BEEFSubmitPolicy interface {
 	MaxObjectBytes(src net.IP) int
 }
 
-// SetBEEFSubmitPolicy installs the multi-topic admission policy (nil = the
-// OSS single-topic stance).
+// SetBEEFSubmitPolicy installs the deliverable-topic policy (nil = the OSS
+// stance: one deliverable topic per record).
 func (fw *Forwarder) SetBEEFSubmitPolicy(p BEEFSubmitPolicy) { fw.beefPolicy = p }
 
 // beefObjectBoundFor resolves the object bound for one submitter: the policy's
@@ -99,9 +101,8 @@ func (fw *Forwarder) beefObjectBoundFor(src net.Addr) int {
 }
 
 // beefRecordMaxEnvelope is the largest BRC-149 submission-record envelope the
-// grammar allows around its object: tag, RecordVer, TopicCount, a full topic
-// list, and ObjectLen.
-const beefRecordMaxEnvelope = 2 + 1 + 1 + objfmt.BEEFMaxTopics*(1+objfmt.BEEFMaxTopicLen) + 4
+// grammar allows around its object.
+const beefRecordMaxEnvelope = objfmt.BEEFRecordMaxEnvelope
 
 // BEEFRecordBound returns how many bytes a stream reader may buffer for one
 // submission record from src: that submitter's object bound plus the largest
@@ -146,9 +147,10 @@ func egrIface(egr *Egress) string {
 
 // SubmitBEEF admits one BRC-148 submission record: (topic list, BEEF
 // object). It validates the record grammar, the object's leading marker, and
-// the size bound, then emits one FrameVer 0x09 frame per submitted topic via
-// [Forwarder.ProcessBEEF]. rec must be the complete record (one record per
-// UDP datagram; the TCP lane splits the stream via objfmt.Reader).
+// the size bound, then emits ONE FrameVer 0x09 frame carrying the record
+// verbatim via [Forwarder.ProcessBEEF], with DeliverCount from the policy
+// (1 without one). rec must be the complete record (one record per UDP
+// datagram; the TCP lane splits the stream via objfmt.Reader).
 func (fw *Forwarder) SubmitBEEF(egr *Egress, rec []byte, src net.Addr, workerID int) {
 	result := "ok"
 	defer func() {
@@ -174,42 +176,42 @@ func (fw *Forwarder) SubmitBEEF(egr *Egress, rec []byte, src net.Addr, workerID 
 		result = "bad_marker"
 		return
 	}
-	// OSS default stance: single-topic only. Multi-topic fan-out (one object →
-	// N topic frames = up-to-15× amplification) is an authenticated capability
-	// reserved for authenticated ingress policies per BRC-149 §Fan-out admission; the
-	// OSS open ingress admits TopicCount == 1 and rejects any record naming more
-	// than one topic. The wire grammar still carries 1..15 (the codec is shared);
-	// this is an admission gate, not a format change.
-	if len(r.Topics) > 1 {
-		if fw.beefPolicy == nil || !fw.beefPolicy.AdmitTopics(srcIPOf(src), len(r.Topics)) {
-			result = "multi_topic"
-			return
-		}
+	// One record, one frame, at any topic count: the payload is the record
+	// verbatim so every name the publisher wrote reaches the subscriber, and
+	// DeliverCount bounds how many of the leading names delivery edges match.
+	// The open path (no policy) delivers the first topic only, which is what
+	// keeps a free, anonymous record from becoming fan-out; a policy may lift
+	// an identified source to its cap. Nothing here is a reject.
+	deliver := fw.beefDeliverCount(src, len(r.Topics))
+	buf, err := objfmt.BEEFMulticastRecord(rec, deliver)
+	if err != nil {
+		result = "malformed"
+		return
 	}
+	if fw.rec != nil {
+		fw.rec.IngressMetered(metrics.IngressClassBEEF, false, len(buf))
+		fw.rec.BEEFTopics(len(r.Topics), deliver)
+	}
+	fw.ProcessBEEF(egr, buf, src, workerID)
+}
 
-	// Compute the object identity once; emit the single topic's frame (the
-	// grammar permits more, but OSS admission caps at one — see above).
-	contentID := objfmt.ContentID(r.Object)
-	for _, topic := range r.Topics {
-		bf := &frame.BEEFFrame{
-			ContentID: contentID,
-			TopicID:   objfmt.TopicID(topic),
-			Payload:   r.Object,
+// beefDeliverCount resolves how many of a record's n leading topics are
+// deliverable for src: the policy's answer clamped to [1, n], or 1 when no
+// policy is installed or the source is unknown (relay, spine re-emit).
+func (fw *Forwarder) beefDeliverCount(src net.Addr, n int) int {
+	deliver := 1
+	if fw.beefPolicy != nil {
+		if ip := srcIPOf(src); ip != nil {
+			deliver = fw.beefPolicy.DeliverCount(ip, n)
 		}
-		buf := make([]byte, frame.HeaderSize+len(r.Object))
-		wn, err := frame.EncodeBEEF(bf, buf)
-		if err != nil {
-			result = "malformed"
-			return
-		}
-		if fw.rec != nil {
-			fw.rec.IngressMetered(metrics.IngressClassBEEF, false, wn)
-		}
-		fw.ProcessBEEF(egr, buf[:wn], src, workerID)
 	}
-	if len(r.Topics) > 1 && fw.beefPolicy != nil {
-		fw.beefPolicy.OnFanout(srcIPOf(src), len(r.Topics), len(r.Object))
+	if deliver < 1 {
+		deliver = 1
 	}
+	if deliver > n {
+		deliver = n
+	}
+	return deliver
 }
 
 // ProcessBEEF handles a framed BRC-148 BEEF object (FrameVer 0x09): decode,
@@ -241,7 +243,17 @@ func (fw *Forwarder) ProcessBEEF(egr *Egress, raw []byte, src net.Addr, workerID
 	// bypasses -beef-max-object-bytes entirely (BRC-149 makes the bound an
 	// ingress MUST). Whole frames are datagram/stream-bounded upstream, but the
 	// declared length is what downstream reassembly would allocate against.
-	if fw.beefMaxObject > 0 && len(bf.Payload) > fw.beefMaxObject {
+	// The payload is either the submission record verbatim or a bare object;
+	// the bound is on the OBJECT (BRC-149's ingress MUST), so a record may
+	// exceed it by its envelope and nothing more.
+	object, topics, err := objfmt.SplitBEEFPayload(bf.Payload)
+	if err != nil {
+		if fw.rec != nil {
+			fw.rec.PacketDropped(egrIface(egr), workerID, "beef_bad_record")
+		}
+		return
+	}
+	if fw.beefMaxObject > 0 && len(object) > fw.beefMaxObject {
 		if fw.rec != nil {
 			fw.rec.PacketDropped(egrIface(egr), workerID, "beef_oversize")
 		}
@@ -255,9 +267,12 @@ func (fw *Forwarder) ProcessBEEF(egr *Egress, raw []byte, src net.Addr, workerID
 	// MUST on every acceptance path, and a frame addressed to no topic is
 	// undeliverable by construction: it still costs a full fabric emission,
 	// and because an empty topic election matches every topic it lands on
-	// every aggregator consumer and is billed to them.
+	// every aggregator consumer and is billed to them. A pre-framed RECORD
+	// must also put its first topic in the header slot, or the shard key and
+	// the names disagree and the edge matches a topic the publisher never
+	// led with.
 	//
-	// Both checks sit BEFORE the dedup claim on purpose. A drop taken after
+	// These checks sit BEFORE the dedup claim on purpose. A drop taken after
 	// the claim would burn the (ContentID, TopicID) key, so a corrected
 	// re-submission of the same object would be suppressed as a duplicate
 	// for the whole TTL.
@@ -271,11 +286,31 @@ func (fw *Forwarder) ProcessBEEF(egr *Egress, raw []byte, src net.Addr, workerID
 		}
 		return
 	}
-	if !objfmt.IsBEEFObject(bf.Payload) {
+	if topics != nil && bf.TopicID != objfmt.TopicID(topics[0]) {
+		if fw.rec != nil {
+			fw.rec.PacketDropped(egrIface(egr), workerID, "beef_topic_mismatch")
+		}
+		return
+	}
+	if !objfmt.IsBEEFObject(object) {
 		if fw.rec != nil {
 			fw.rec.PacketDropped(egrIface(egr), workerID, "beef_bad_marker")
 		}
 		return
+	}
+
+	// DeliverCount is the ingress's to set, never the publisher's: a
+	// pre-framed record stamped with 15 deliverable topics from an anonymous
+	// source is exactly the amplification the open path exists to refuse.
+	// Overwrite it from the policy for any frame that entered here (src set);
+	// relay and spine re-emission (src == nil) carry the door's value on.
+	if src != nil {
+		n := 1
+		if topics != nil {
+			n = len(topics)
+		}
+		raw[7] = uint8(fw.beefDeliverCount(src, n))
+		bf.DeliverCount = raw[7]
 	}
 
 	// Rate budgets are charged before the dedup claim, so a flood of

@@ -6,12 +6,17 @@ import (
 )
 
 type boundPolicy struct {
-	auth net.IP
-	lift int
+	auth    net.IP
+	lift    int
+	deliver int
 }
 
-func (p *boundPolicy) AdmitTopics(net.IP, int) bool { return false }
-func (p *boundPolicy) OnFanout(net.IP, int, int)    {}
+func (p *boundPolicy) DeliverCount(src net.IP, n int) int {
+	if p.deliver > 0 && src.Equal(p.auth) {
+		return p.deliver
+	}
+	return 1
+}
 func (p *boundPolicy) MaxObjectBytes(src net.IP) int {
 	if src != nil && src.Equal(p.auth) {
 		return p.lift

@@ -742,24 +742,31 @@ knobs. Canonical spec: `bsv-multicast/docs/brc-148-shard-domain-beef-plane.md`.
 | `-beef-shard-bits` / `BEEF_SHARD_BITS` | `0` | BEEF plane width (band `0x1000 + 2^bits` groups); valid 0–12 (`0` = single group); must match listeners/retry |
 | `-beef-max-object-bytes` / `BEEF_MAX_OBJECT_BYTES` | `1048576` | Maximum accepted object size (BRC-149's ingress MUST-bound); larger submissions are rejected and counted (`bsp_beef_submissions_total{result="oversize"}`) |
 
-The forwarder expands one record into one stamped frame per topic
-(`SubmitBEEF` → `ProcessBEEF`): HashKey = XXH64(sender ∥ banded groupIdx ∥
+The forwarder carries one record as ONE stamped frame at any topic count,
+the payload being the record verbatim so every name reaches the subscriber
+(`SubmitBEEF` → `ProcessBEEF`): TopicID = the record's first topic, header
+byte 7 `DeliverCount` = how many leading topics delivery edges may match,
+HashKey = XXH64(sender ∥ banded groupIdx ∥
 **zeros** — TopicID is excluded from the flow key per the spec), ingress
 dedup claims the **(ContentID, TopicID) pair** as `SHA-256(ContentID ∥ TopicID)`,
 and objects exceeding `-frag-mtu` fragment via BRC-130 with `OrigFrameVer 0x09`.
 
 ### Admission
 
-- **Single-topic records only, by default.** The record grammar carries
-  `topicCount` 1..15, but multi-topic fan-out (one object → N frames, up to
-  15× amplification) is an authenticated capability per BRC-149. With no submit
-  policy installed (`Forwarder.SetBEEFSubmitPolicy`, the open-ingress default)
-  a record naming more than one topic is rejected
-  (`bsp_beef_submissions_total{result="multi_topic"}`). A downstream build
-  installs a policy that admits 2..15 topics per source and may lift the
-  object bound for that source (never below `-beef-max-object-bytes`).
+- **Never rejected for topic count.** A record names 1..15 topics on every
+  path. With no submit policy installed (`Forwarder.SetBEEFSubmitPolicy`,
+  the open-ingress default) the first topic is the only deliverable one
+  (`DeliverCount = 1`) and every further name is a label the subscriber
+  receives in the payload but no edge matches on; the open door therefore
+  never fans out. A downstream build installs a policy answering how many
+  leading topics a known source may deliver (up to its cap), and may lift
+  the object bound for that source (never below `-beef-max-object-bytes`).
+  A pre-framed `0x09` never keeps the publisher's byte 7: the ingress
+  overwrites it from the policy, and drops a record whose header TopicID is
+  not its first topic (`beef_topic_mismatch`).
 - **Submission results** (`bsp_beef_submissions_total{result}`): `ok`,
-  `disabled`, `malformed`, `oversize`, `bad_marker`, `multi_topic`.
+  `disabled`, `malformed`, `oversize`, `bad_marker`. Topic roles on admitted
+  records: `bsp_beef_topics_total{role="deliverable"|"label"}`.
 - **Oversize records over TCP.** Both TCP paths (the shared port and
   `-beef-listen-port`) read a record under the submitter's object bound plus
   the largest record envelope (983 bytes). A record that fits that allowance is

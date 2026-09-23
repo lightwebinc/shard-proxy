@@ -78,10 +78,14 @@ func TestTCPIngressBEEFRecordStream(t *testing.T) {
 		}
 	}
 
-	// A multi-topic record is rejected by the OSS single-topic gate — no frames
-	// reach the sink (multi-topic requires an authenticated submit policy).
-	if rejected := runTCPConn(t, mustRecord(t, []string{"tm_b", "tm_c"})); len(rejected) != 0 {
-		t.Fatalf("multi-topic record admitted %d frames, want 0 (rejected)", len(rejected))
+	// A multi-topic record is ONE frame on the open path: the first topic
+	// deliverable, every name in the payload, no fan-out.
+	multi := runTCPConn(t, mustRecord(t, []string{"tm_b", "tm_c"}))
+	if len(multi) != 1 {
+		t.Fatalf("multi-topic record admitted %d frames, want exactly 1", len(multi))
+	}
+	if bf, _ := frame.DecodeBEEF(multi[0]); bf.Deliverable() != 1 || bf.TopicID != objfmt.TopicID("tm_b") {
+		t.Fatalf("open path frame: deliverable=%d, want 1 on the first topic", bf.Deliverable())
 	}
 }
 
@@ -123,18 +127,31 @@ func runBEEFLane(t *testing.T, stream []byte) [][]byte {
 	return sunk
 }
 
-// TestObjectIngressBEEFLane proves the dedicated lane splits records into one
-// frame per single-topic record like the shared port; multi-topic records are
-// rejected by the OSS single-topic admission gate (any open port is single-topic).
+// TestObjectIngressBEEFLane proves the dedicated lane splits a stream into
+// one frame per record like the shared port, at any topic count (an open
+// port delivers the first topic; the names all travel).
 func TestObjectIngressBEEFLane(t *testing.T) {
 	stream := append(mustRecord(t, []string{"tm_x"}), mustRecord(t, []string{"tm_z"})...)
 	sunk := runBEEFLane(t, stream)
 	if len(sunk) != 2 {
 		t.Fatalf("beef lane admitted %d frames, want 2", len(sunk))
 	}
-	if rejected := runBEEFLane(t, mustRecord(t, []string{"tm_x", "tm_y"})); len(rejected) != 0 {
-		t.Fatalf("beef lane admitted %d frames from a multi-topic record, want 0 (rejected)", len(rejected))
+	multi := runBEEFLane(t, mustRecord(t, []string{"tm_x", "tm_y"}))
+	if len(multi) != 1 {
+		t.Fatalf("beef lane admitted %d frames from a multi-topic record, want exactly 1", len(multi))
 	}
+	if _, topics, _ := objfmt.SplitBEEFPayload(mustDecodeBEEF(t, multi[0]).Payload); len(topics) != 2 {
+		t.Fatalf("payload names = %d, want both", len(topics))
+	}
+}
+
+func mustDecodeBEEF(t *testing.T, raw []byte) *frame.BEEFFrame {
+	t.Helper()
+	bf, err := frame.DecodeBEEF(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bf
 }
 
 // TestObjectIngressBEEFLaneRejectsBareTx proves the single-class lane drops

@@ -187,8 +187,7 @@ type Recorder struct {
 	ingressDeduped        metric.Int64Counter // by worker, iface, frame_type (cold)
 	privilegedRejected    metric.Int64Counter // by frame_type (cold; miner-tier gate)
 	beefSubmissions       metric.Int64Counter // by result (cold; BRC-148 submission admission)
-	beefFanoutTopics      metric.Int64Counter // admitted multi-topic frames, free|billable
-	beefFanoutBytes       metric.Int64Counter // amplified object bytes, free|billable
+	beefTopics            metric.Int64Counter // topics named on admitted records, deliverable|label
 	blockPoWRejected      metric.Int64Counter // block announces failing the PoW gate (cold)
 	subtreeRootChecks     metric.Int64Counter // by result (cold; -verify-subtree-root)
 	promTxidClaimLocalHit *promclient.CounterVec
@@ -577,12 +576,8 @@ func New(instanceID string, numWorkers int, otlpEndpoint string, otlpInterval ti
 		metric.WithDescription("BRC-148 BEEF submission records by admission result (ok, malformed, oversize, bad_marker, disabled)")); err != nil {
 		return nil, err
 	}
-	if r.beefFanoutTopics, err = meter.Int64Counter("bsp_beef_fanout_topics_total",
-		metric.WithDescription("BRC-149 topic frames emitted from ADMITTED multi-topic submissions, split free|billable by the operator's free-topic allowance N")); err != nil {
-		return nil, err
-	}
-	if r.beefFanoutBytes, err = meter.Int64Counter("bsp_beef_fanout_bytes_total",
-		metric.WithDescription("Object bytes amplified by multi-topic fan-out, split free|billable — billable is the delivery-rated overage (topics beyond N x object bytes)")); err != nil {
+	if r.beefTopics, err = meter.Int64Counter("bsp_beef_topics_total",
+		metric.WithDescription("Topic names on admitted BRC-149 submission records, by role: deliverable (matched at the edge; 1 on the open path, up to the operator's cap on the authenticated path) or label (carried to the subscriber, never matched, never billed)")); err != nil {
 		return nil, err
 	}
 	// TxidClaim* are per-packet when ingress dedup is on; direct prometheus
@@ -789,39 +784,27 @@ func (r *Recorder) SubtreeRootCheck(result string) {
 }
 
 // BEEFSubmission records one BRC-148 submission-record admission outcome
-// (result: ok, malformed, oversize, bad_marker, multi_topic, disabled).
-// multi_topic = a record naming >1 topic, rejected by the OSS single-topic
-// admission gate (multi-topic requires an authenticated submit policy). Drives the
-// ingress-abuse posture and the e2e admission assertions.
+// (result: ok, malformed, oversize, bad_marker, disabled). Topic count is
+// never a rejection: a record names 1..15 and the plane delivers a prefix
+// of them. Drives the ingress-abuse posture and the e2e admission assertions.
 func (r *Recorder) BEEFSubmission(result string) {
 	r.beefSubmissions.Add(context.Background(), 1, metric.WithAttributes(
 		attribute.String("result", result),
 	))
 }
 
-// BEEFFanout records one ADMITTED multi-topic submission: topics is the frame
-// count emitted, free is the operator's allowance N applied to it, and
-// objectBytes is the object's size. Split free|billable so the billable series
-// is directly the delivery-rated overage — the amplification a submitter caused
-// beyond its allowance, priced as ordinary delivery volume (BRC-149 keeps
-// ingress itself unbilled).
-func (r *Recorder) BEEFFanout(topics, free, objectBytes int) {
-	if r == nil || r.beefFanoutTopics == nil {
+// BEEFTopics records the topic names on one admitted submission record:
+// deliverable is how many of the leading names the frame's DeliverCount
+// makes matchable, named is the record's TopicCount. The difference is
+// labels: names the subscriber receives in the payload and nothing else.
+func (r *Recorder) BEEFTopics(named, deliverable int) {
+	if r == nil || r.beefTopics == nil {
 		return
 	}
-	billableTopics := topics - free
-	if billableTopics < 0 {
-		billableTopics = 0
-	}
-	freeTopics := topics - billableTopics
 	ctx := context.Background()
-	freeAttr := metric.WithAttributes(attribute.String("tier", "free"))
-	billAttr := metric.WithAttributes(attribute.String("tier", "billable"))
-	r.beefFanoutTopics.Add(ctx, int64(freeTopics), freeAttr)
-	r.beefFanoutBytes.Add(ctx, int64(freeTopics*objectBytes), freeAttr)
-	if billableTopics > 0 {
-		r.beefFanoutTopics.Add(ctx, int64(billableTopics), billAttr)
-		r.beefFanoutBytes.Add(ctx, int64(billableTopics*objectBytes), billAttr)
+	r.beefTopics.Add(ctx, int64(deliverable), metric.WithAttributes(attribute.String("role", "deliverable")))
+	if labels := named - deliverable; labels > 0 {
+		r.beefTopics.Add(ctx, int64(labels), metric.WithAttributes(attribute.String("role", "label")))
 	}
 }
 
