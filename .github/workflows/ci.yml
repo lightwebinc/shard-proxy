@@ -13,45 +13,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   ci:
-    name: ci (dagger)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          path: shard-proxy
-
-      - name: Resolve shard-common ref
-        id: common_ref
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BRANCH: ${{ github.head_ref || github.ref_name }}
-        run: |
-          if [ -n "$BRANCH" ] && gh api "repos/lightwebinc/shard-common/branches/$BRANCH" >/dev/null 2>&1; then
-            echo "ref=$BRANCH" >> "$GITHUB_OUTPUT"
-            echo "Using shard-common@$BRANCH (matching feature branch found)"
-          else
-            echo "ref=main" >> "$GITHUB_OUTPUT"
-            echo "Using shard-common@main (no matching feature branch)"
-          fi
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: lightwebinc/shard-common
-          ref: ${{ steps.common_ref.outputs.ref }}
-          path: shard-common
-
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
-        with:
-          go-version-file: shard-proxy/ci/go.mod
-          cache: false
-
-      - name: Run Dagger pipeline
-        working-directory: shard-proxy
-        env:
-          GOWORK: "off"
-        run: make ci
+    uses: lightwebinc/ci/.github/workflows/go-dagger.yml@3f438e60ade351107a3d1601955ebbf34de8caf1 # v0.1.0
 
   e2e:
     name: e2e (host)
@@ -79,7 +46,7 @@ jobs:
           ref: ${{ steps.common_ref.outputs.ref }}
           path: shard-common
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: shard-proxy/go.mod
 
@@ -154,7 +121,7 @@ jobs:
           ref: ${{ steps.common_ref.outputs.ref }}
           path: shard-common
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: shard-proxy/go.mod
 
