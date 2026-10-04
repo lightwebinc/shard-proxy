@@ -153,7 +153,7 @@ environment variables, or CLI flags.
 
 A Kubernetes Helm chart is published from a dedicated chart repository:
 
-- Repository: [`lightwebinc/shard-proxy-helm`](https://github.com/lightwebinc/shard-proxy-helm)
+- Repository: [`charts/shard-proxy`](https://github.com/lightwebinc/charts/tree/main/charts/shard-proxy)
 - HTTPS:
   ```
   helm repo add bsp https://lightwebinc.github.io/shard-proxy-helm

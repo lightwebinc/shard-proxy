@@ -727,7 +727,7 @@ Local floor on the bridging duration. `0` ⇒ honour the pilot's
 
 Flags are exposed under `.config` in the corresponding Helm chart's `values.yaml` — see the chart README for the covered set. See the chart repository for installation snippets and the `values.schema.json` for validation rules.
 
-Chart: [`lightwebinc/shard-proxy-helm`](https://github.com/lightwebinc/shard-proxy-helm)
+Chart: [`charts/shard-proxy`](https://github.com/lightwebinc/charts/tree/main/charts/shard-proxy)
 
 ## BRC-148 BEEF object plane
 
