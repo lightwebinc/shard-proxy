@@ -234,6 +234,67 @@ sub_e ──TCP 8726──▶ [push lane] ─▶ BRC-143 → BRC-132 ─▶ forw
 blk_f ──UDP 8725──▶ [worker N]  ─▶ dropped (privileged frame on transaction-class ingress)
 ```
 
+## Forward rules, TCP framing, and error handling
+
+Wire formats are specified in
+[shard-common docs/protocol.md](https://github.com/lightwebinc/shard-common/blob/main/docs/protocol.md).
+
+### Forward rules
+
+The proxy processes each incoming datagram in two steps:
+
+1. **Decode** — parse the frame header (BRC-12 or BRC-124/BRC-128); drop with a debug log on
+   bad magic, unsupported version, oversized payload, or truncated datagram.
+   The TxID is extracted to derive the destination multicast group.
+
+2. **Forward** — for BRC-124 frames, if `SeqNum` (`raw[48:56]`) is **non-zero**
+   the sender has pre-stamped the frame: it is forwarded verbatim when
+   `-allow-stamped-ingress` is set and dropped (`stamped_ingress`) otherwise
+   (see [Stamped ingress](configuration.md#stamped-ingress)). If `SeqNum`
+   is zero the proxy stamps `HashKey` at `raw[40:48]` and `SeqNum` at `raw[48:56]`
+   in-place: `HashKey = XXH64(senderIPv6 ∥ groupIdx ∥ subtreeID)` and `SeqNum`
+   is the next monotonic counter for that flow. `SubtreeID` is read from
+   `raw[56:88]` (zeros if unset). Write the raw bytes to every configured egress
+   interface via `IPV6_MULTICAST_IF`. BRC-12 frames are always forwarded verbatim
+   without modification.
+
+### TCP framing
+
+When `-tcp-listen-port` is non-zero, the proxy also accepts TCP connections for
+reliable frame delivery. Grammar is detected **once per connection** from the
+leading bytes: the BSV network magic selects a framed stream; a `0xBEEF`
+record tag selects a BEEF submission-record stream
+([BRC-149 BEEF object frame](https://github.com/lightwebinc/shard-common/blob/main/docs/protocol.md#3b-brc-149-beef-object-frame)); anything else is a
+bare transaction stream. On a framed stream the wire format is identical to
+UDP: BRC-12, BRC-124, or BRC-128 frames concatenated end-to-end with no
+additional envelope.
+
+**Read sequence per frame (framed stream):**
+1. Read 44 bytes (minimum header, sufficient for both BRC-12 and the start of BRC-124/BRC-128).
+2. Inspect `FrameVer` at byte 6.
+   - **BRC-12:** header is complete; `PayLen` is at bytes 40–43.
+   - **BRC-124/BRC-128:** read 48 more bytes to complete the 92-byte header;
+     `PayLen` is at bytes 88–91.
+3. Read exactly `PayLen` bytes (the payload).
+4. Forward the reassembled raw bytes (HashKey/SeqNum stamped at 40–55 if SeqNum was zero, before processing).
+
+The proxy closes the TCP connection on any protocol violation (bad magic,
+unsupported version byte, or read error).
+
+### Error handling
+
+| Condition | UDP | TCP |
+|----------------------------------------|----------------------------------|----------------------------------|
+| Bad magic | datagram silently dropped | connection closed |
+| Unknown frame version                  | datagram silently dropped | connection closed                |
+| Truncated datagram                     | datagram silently dropped | read error → connection closed   |
+| Egress write error | logged; next interface attempted | logged; next interface attempted |
+
+All drops are counted in the `bsp_packets_dropped_total` Prometheus metric with
+a `reason` label (e.g. `decode_error`, `write_error`, `truncated`,
+`bundle_malformed`, `stamped_ingress`, `ingress_not_ef`, `beef_oversize`); the
+authoritative reason set is the `forwarder` package; see the [Metrics Reference](metrics.md).
+
 ## Wire Format
 
 ### BRC-124/BRC-128 (current — 92 bytes)

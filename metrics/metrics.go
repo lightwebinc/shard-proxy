@@ -798,9 +798,9 @@ func (r *Recorder) BEEFSubmission(result string) {
 // makes matchable, named is the record's TopicCount. The difference is
 // labels: names the subscriber receives in the payload and nothing else.
 //
-// The dimension is topic_role, NOT role: the site-aggregator stamps every
-// federated sample with the site label set (fabric, geo, location, node,
-// region, role), so a metric carrying its own "role" makes the whole
+// The dimension is topic_role, NOT role: a federating scraper that stamps role
+// (with the rest of its site label set) onto every federated sample would see
+// a duplicate label, so a metric carrying its own "role" makes the whole
 // /federate payload invalid ("label name role is not unique") and takes the
 // site's ENTIRE scrape down, not just this series.
 func (r *Recorder) BEEFTopics(named, deliverable int) {

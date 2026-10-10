@@ -28,22 +28,25 @@ sender  ──UDP/TCP──►  shard-proxy  ──UDP multicast──►  FF05:
                                                                  (subset of subscribers)
 ```
 
-## Documentation
+Ingress is transaction-only; the miner multicast port is deprecated (see
+[Ingress is transaction-only](docs/configuration.md#ingress-is-transaction-only-miner-port-deprecated)).
 
-- [Architecture](docs/architecture.md) — system overview, multi-CPU design, graceful shutdown, BRC-139 manifest consumer, package structure
-- [Configuration](docs/configuration.md) — all flags, environment variables, ingress modes, drain timeout
+## Quick start
 
-## Dependencies
+```bash
+make
+./shard-proxy \
+  -iface            eth0 \
+  -shard-bits       8    \
+  -scope            site \
+  -udp-listen-port  8725 \
+  -tcp-listen-port  8725 \
+  -egress-port      9001
+```
 
-- [`github.com/lightwebinc/shard-common`](https://github.com/lightwebinc/shard-common) — `frame`, `bundle`, `objfmt`, `shard`, `seqhash`, `pow`, `cache`, `txidset`, `netjoin`, `manifest`, `logging`, `hostinfo`, `tracing` packages
-
-## Requirements
-
-- Go 1.26 or later (`go.mod` floor: 1.26.2)
-- Linux kernel 3.9+, FreeBSD 12.3+ (for `SO_REUSEPORT`), MacOS
-- IPv6 enabled on the egress interface(s)
-- Multicast routing / MLD snooping configured for your subscriber fabric
-- Bitcoin SV ingress transaction packets in BRC-12 (legacy) or BRC-124/BRC-128 frame format.
+More invocations (SSM, BRC-142 coalescing, BRC-139 auto-shard-config, JSON
+logging, graceful drain) are in
+[docs/configuration.md § Example Invocations](docs/configuration.md#example-invocations).
 
 ## Build
 
@@ -54,93 +57,40 @@ make test-e2e   # end-to-end test (builds all binaries, runs test/run-e2e.sh)
 make clean      # removes built binaries
 ```
 
-`cmd/latency-sink` (a multicast receiver that reports one-way latency
-percentiles from `perf-test -latency-stamp` senders) is built directly with
-`go build ./cmd/latency-sink`.
+`cmd/latency-sink` (one-way latency receiver for `perf-test -latency-stamp`)
+is built with `go build ./cmd/latency-sink`.
 
-## Run
+## Requirements
 
-```bash
-./shard-proxy \
-  -iface            eth0 \
-  -shard-bits       8    \
-  -scope            site \
-  -udp-listen-port  8725 \
-  -egress-port      9001
+- Go 1.26 or later (`go.mod` floor: 1.26.2)
+- Linux kernel 3.9+, FreeBSD 12.3+ (for `SO_REUSEPORT`), MacOS
+- IPv6 enabled on the egress interface(s)
+- Multicast routing / MLD snooping configured for your subscriber fabric
+
+## Layout
+
+```
+main.go               — entry point
+config/               — flags and environment variables
+forwarder/            — ingress, stamping, egress pipeline
+worker/               — per-CPU UDP workers and TCP / push-lane ingress listeners
+manifest/             — BRC-139 manifest consumer (auto-shard-config)
+metrics/              — Prometheus/OTel metrics, health endpoints
+cmd/                  — test and perf tools (send/recv-test-frames, perf-test, latency-sink)
+test/                 — end-to-end test harness
+docs/                 — architecture, configuration, metrics
 ```
 
-With TCP ingress enabled:
+## Documentation
 
-```bash
-./shard-proxy \
-  -iface            eth0 \
-  -udp-listen-port  8725 \
-  -tcp-listen-port  8725
-```
+- [Architecture](docs/architecture.md) — system overview, multi-CPU design, graceful shutdown, BRC-139 manifest consumer, package structure
+- [Configuration](docs/configuration.md) — all flags, environment variables, ingress modes, drain timeout, example invocations
+- [Metrics Reference](docs/metrics.md) — every exported `bsp_` series
+- [Protocol specification](https://github.com/lightwebinc/shard-common/blob/main/docs/protocol.md)
 
-Ingress is **transaction-only** at the component boundary: port 8725 accepts
-BRC-12/124/128 transactions, framed or bare (an anchor is an ordinary
-transaction), plus BRC-148 BEEF submission records and FrameVer `0x09` frames
-(an open class; `-beef-listen-port`, standard 8728, is an optional dedicated
-BEEF lane for flow separation only). The old
-privileged **miner multicast port was deprecated (2026-07-07)** — blocks and
-subtrees are no longer submitted as multicast frames. They enter only as
-BRC-144 (block) / BRC-143 (subtree) push frames on the proxy's tunnel-bound
-push ports; multicast is fabric-internal transport. See the
-[design direction](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#ingress-authorization-miner-tier-gate).
+## Dependencies
 
-With Source-Specific Multicast (RFC 4607) — see [SSM Support Plan](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#source-specific-multicast-ssm):
-
-```bash
-./shard-proxy \
-  -iface            eth0 \
-  -shard-bits       2 \
-  -scope            site \
-  -source-mode      ssm \
-  -bind-source      fd20::a01    # MUST be unique per replica
-```
-
-`-source-mode=ssm` switches the data plane to the `FF3x::/32` SSM range
-(FF35 for site scope, FF3E for global per RFC 8815). `-bind-source` is
-mandatory in SSM mode and MUST differ across replicas — anycast or
-ECMP-shared sources break PIM-SSM RPF.
-
-With opt-in BRC-142 coalescing (pack many small transactions per bundle
-datagram at the origin edge; a relay spine forwards bundles verbatim) — see
-[docs/configuration.md](docs/configuration.md#brc-142-coalescing-origin-side):
-
-```bash
-./shard-proxy \
-  -iface              eth0 \
-  -coalesce \                    # opt-in; off by default
-  -coalesce-max-bytes 1500       # path MTU for a bundle datagram (IPv6+UDP included)
-```
-
-With opt-in BRC-139 auto-shard-config (manifest-driven `ShardBits` adoption) — see [Automatic Shard Configuration Plan](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#automatic-shard-configuration):
-
-```bash
-./shard-proxy \
-  -iface                       eth0 \
-  -manifest-consumer-enabled \          # opt-in; off by default
-  -manifest-bootstrap          required \  # fail closed until quorum
-  -pilot-quorum                2
-```
-
-Default behavior is restart-on-adopt; add `-live-resharding` for the dual-emit bridging path. See [docs/architecture.md](docs/architecture.md#brc-139-manifest-consumer-auto-shard-config) for the consumer subsystem.
-
-With JSON structured logging for fleet aggregation (and opt-in tracing) — see [Unified Component Logging](https://github.com/lightwebinc/shard-common/blob/main/docs/logging.md):
-
-```bash
-./shard-proxy \
-  -iface          eth0 \
-  -log-format     json \   # one JSON object per line on stdout
-  -log-level      info \   # runtime-togglable via POST /loglevel and SIGHUP
-  -trace-sampling 0        # >0 + -otlp-endpoint enables control-plane traces
-```
-
-Each binary emits a one-shot `host.inventory` event (OS/CPU/mem/NIC incl. IPv4+IPv6) at startup and a `bsp_host_info` gauge. See [docs/architecture.md](docs/architecture.md#logging--tracing).
-
-See [docs/configuration.md](docs/configuration.md) for all flags and environment variable equivalents.
+- [`github.com/lightwebinc/shard-common`](https://github.com/lightwebinc/shard-common) — `frame`, `bundle`, `objfmt`, `shard`, `seqhash`, `pow`, `cache`, `txidset`, `netjoin`, `manifest`, `logging`, `hostinfo`, `tracing` packages
 
 ## Container image
 
@@ -154,14 +104,13 @@ environment variables, or CLI flags.
 A Kubernetes Helm chart is published from a dedicated chart repository:
 
 - Repository: [`charts/shard-proxy`](https://github.com/lightwebinc/charts/tree/main/charts/shard-proxy)
-- HTTPS:
-  ```
-  helm repo add bsp https://lightwebinc.github.io/shard-proxy-helm
-  helm install proxy bsp/shard-proxy
-  ```
-- OCI: `helm install proxy oci://ghcr.io/lightwebinc/charts/shard-proxy`
+- Install: `helm install shard-proxy oci://ghcr.io/lightwebinc/charts/shard-proxy`
 
 Flags are exposed under `.config` in the chart's `values.yaml` — see the chart README for the covered set and `values.schema.json` for validation rules.
+
+## Releases
+
+Releases and release notes live on [GitHub Releases](https://github.com/lightwebinc/shard-proxy/releases); there is no CHANGELOG.
 
 ## License
 

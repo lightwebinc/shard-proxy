@@ -43,9 +43,9 @@ as fallbacks; hard-coded defaults apply when neither is present.
 | `-trace-sampling` | `TRACE_SAMPLING` | `0` | Distributed-trace head sampling ratio `0`–`1` (`0` = tracing off, no-op tracer; exports via `-otlp-endpoint`; control-plane only, never the packet hot path) |
 | `-frag-mtu` | `FRAG_MTU` | `1500` | Path MTU for BRC-130 fragmentation; default 1500 (Ethernet baseline). Set to the **smallest** MTU on the egress path — on a tunnelled fabric that is the tunnel inner MTU, not the local NIC. `0` = disabled, which strands every payload above MTU−140 (1360 at 1500) as an undeliverable oversize datagram |
 | `-coalesce` | `COALESCE` | `false` | Opt-in BRC-142 origin-side frame coalescing (pack many small same-`(group, subtree)` tx per datagram to cut egress pps). See [BRC-142 Coalescing](#brc-142-coalescing-origin-side) |
-| `-coalesce-max-bytes` | `COALESCE_MAX_BYTES` | `1500` | Path MTU budget for a coalesced bundle, **on the wire** (1500 = Ethernet MTU baseline; 9000 for jumbo on a controlled underlay). The 48-byte IPv6+UDP header is subtracted before packing, exactly like `-frag-mtu` |
-| `-coalesce-max-members` | `COALESCE_MAX_MEMBERS` | `0` | Max member transactions per bundle (`0` = MTU-bound only) |
-| `-coalesce-carry-txid` | `COALESCE_CARRY_TXID` | `false` | Carry each member's 32-byte TxID on the wire (for downstream dedup / operator accounting) instead of recomputing it on receipt |
+| `-coalesce-max-bytes` | `COALESCE_MAX_BYTES` | `1500` | Path MTU budget for a coalesced bundle, **on the wire** (1500 = Ethernet MTU baseline; 9000 for jumbo on a controlled underlay; `0` also means 1500). Set it to the smallest MTU on the egress path. The 48-byte IPv6+UDP header is subtracted before packing, exactly like `-frag-mtu` |
+| `-coalesce-max-members` | `COALESCE_MAX_MEMBERS` | `0` | Max member transactions per bundle (`0` = MTU-bound only, capped by the wire `TxCount` uint16) |
+| `-coalesce-carry-txid` | `COALESCE_CARRY_TXID` | `false` | Carry each member's 32-byte TxID on the wire (for downstream dedup / operator accounting; all-or-none across the bundle) instead of recomputing it on receipt (saves 32 B/member) |
 | `-recv-batch` | `BSP_RECV_BATCH` | `32` | Datagrams per `recvmmsg` syscall (1 = per-packet legacy path) |
 | `-retry-tee` | `BSP_RETRY_TEE` | `""` | Mirror each egressed DATA datagram to a co-located retry endpoint's cache-ingest address (e.g. `[::1]:9001`) — needed on a node that originates frames and hosts its own retry cache, since it must never (S,G)-join its own source. Copies are batched into one `sendmmsg` per egress batch. Empty = disabled |
 | `-recv-buf-bytes` | `BSP_RECV_BUF_BYTES` | `0` | Per-worker `SO_RCVBUF` in bytes (`0` = the worker default of 4 MiB; the kernel caps the request at `net.core.rmem_max`) |
@@ -412,12 +412,8 @@ built for, so a relay re-emits it unchanged (one bundle in → one multicast
 datagram out). Never enable origin coalescing on a
 node whose role is to relay bundles.
 
-| Flag | Env | Default | Notes |
-|------|-----|---------|-------|
-| `-coalesce` | `COALESCE` | `false` | Master switch. Off = every transaction egresses as its own frame (legacy) |
-| `-coalesce-max-bytes` | `COALESCE_MAX_BYTES` | `1500` | Path MTU budget for the emitted bundle datagram, IPv6+UDP headers included. `1500` = public-internet Ethernet MTU (realistic baseline); `9000` for jumbo on a controlled underlay. `0` also means 1500. Set it to the SMALLEST MTU on the egress path, as with `-frag-mtu` |
-| `-coalesce-max-members` | `COALESCE_MAX_MEMBERS` | `0` | Hard cap on member transactions per bundle. `0` = bounded only by `-coalesce-max-bytes` (capped by the wire `TxCount` uint16) |
-| `-coalesce-carry-txid` | `COALESCE_CARRY_TXID` | `false` | When set, each member carries its 32-byte TxID on the wire (for downstream dedup / operator accounting) — an all-or-none flag across the bundle. When unset the receiver recomputes TxIDs, saving 32 B/member |
+Flags: `-coalesce`, `-coalesce-max-bytes`, `-coalesce-max-members`,
+`-coalesce-carry-txid` (see [Flags and Environment Variables](#flags-and-environment-variables)).
 
 ```bash
 # origin edge: coalesce small tx to cut egress pps, Ethernet-MTU bundles
@@ -465,6 +461,8 @@ The metrics HTTP server (default `:9100`) exposes:
 - **`/metrics`** — Prometheus text format
 - **`/healthz`** — Always `200 OK` if the process is running
 - **`/readyz`** — `200` when all workers are ready; `503` while starting or draining
+
+Every exported series is listed in the [Metrics Reference](metrics.md).
 
 ---
 
@@ -524,6 +522,66 @@ shard-proxy \
   -udp-listen-port 8725 \
   -drain-timeout 15s
 ```
+
+### Source-Specific Multicast (RFC 4607)
+
+See the [SSM Support Plan](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#source-specific-multicast-ssm).
+
+```bash
+shard-proxy \
+  -iface        eth0 \
+  -shard-bits   2 \
+  -scope        site \
+  -source-mode  ssm \
+  -bind-source  fd20::a01    # MUST be unique per replica
+```
+
+`-source-mode=ssm` switches the data plane to the `FF3x::/32` SSM range
+(FF35 for site scope, FF3E for global per RFC 8815). `-bind-source` is
+mandatory in SSM mode and MUST differ across replicas: anycast or
+ECMP-shared sources break PIM-SSM RPF.
+
+### BRC-142 coalescing
+
+See [BRC-142 Coalescing](#brc-142-coalescing-origin-side).
+
+```bash
+shard-proxy -iface eth0 -coalesce -coalesce-max-bytes 1500
+```
+
+### BRC-139 auto-shard-config
+
+See [Auto-Shard-Config](#auto-shard-config-brc-139) and the
+[Automatic Shard Configuration Plan](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#automatic-shard-configuration).
+
+```bash
+shard-proxy \
+  -iface                      eth0 \
+  -manifest-consumer-enabled \
+  -manifest-bootstrap         required \
+  -pilot-quorum               2
+```
+
+Default behavior is restart-on-adopt; add `-live-resharding` for the
+dual-emit bridging path.
+
+### JSON logging and tracing
+
+See [Unified Component Logging](https://github.com/lightwebinc/shard-common/blob/main/docs/logging.md)
+and [Logging & Tracing](architecture.md#logging--tracing).
+
+```bash
+shard-proxy \
+  -iface          eth0 \
+  -log-format     json \
+  -log-level      info \
+  -trace-sampling 0
+```
+
+`-log-level` is runtime-togglable via `POST /loglevel` and SIGHUP;
+`-trace-sampling` > 0 plus `-otlp-endpoint` enables control-plane traces. Each
+binary emits a one-shot `host.inventory` event at startup and a
+`bsp_host_info` gauge.
 
 ## IANA group-id
 
