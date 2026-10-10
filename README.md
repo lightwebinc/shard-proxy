@@ -128,7 +128,7 @@ With opt-in BRC-139 auto-shard-config (manifest-driven `ShardBits` adoption) —
 
 Default behavior is restart-on-adopt; add `-live-resharding` for the dual-emit bridging path. See [docs/architecture.md](docs/architecture.md#brc-139-manifest-consumer-auto-shard-config) for the consumer subsystem.
 
-With JSON structured logging for fleet aggregation (and opt-in tracing) — see [Unified Logging Plan](https://github.com/lightwebinc/shard-common/blob/main/docs/logging.md):
+With JSON structured logging for fleet aggregation (and opt-in tracing) — see [Unified Component Logging](https://github.com/lightwebinc/shard-common/blob/main/docs/logging.md):
 
 ```bash
 ./shard-proxy \

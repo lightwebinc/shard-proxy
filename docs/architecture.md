@@ -489,7 +489,7 @@ are emitted, throttled, at the syscall sites that observe them:
 **Tracing** is opt-in (`-trace-sampling > 0` with an `-otlp-endpoint`) and
 control-plane only — the forwarder receive/send loops take no span. Export is
 out-of-process via the collector. See the
-[Unified Logging Plan](https://github.com/lightwebinc/shard-common/blob/main/docs/logging.md).
+[Unified Component Logging](https://github.com/lightwebinc/shard-common/blob/main/docs/logging.md).
 
 ## Package Structure
 
