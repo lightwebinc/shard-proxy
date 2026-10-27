@@ -4,7 +4,7 @@
 # Final image: distroless/static:nonroot, no in-image ENV defaults
 # (configure via Helm values.yaml or container env at runtime).
 
-FROM golang:1.27-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS builder
+FROM golang:1.27-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS builder
 RUN apk add --no-cache git ca-certificates
 WORKDIR /src
 
@@ -25,7 +25,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       -ldflags "-s -w -X github.com/lightwebinc/shard-proxy/metrics.Version=${VERSION}" \
       -o /out/shard-proxy .
 
-FROM gcr.io/distroless/static:nonroot@sha256:d62067879de890a1def9da0e7766b7d20810a5e5555cef8506b752437d7a3e88
+FROM gcr.io/distroless/static:nonroot@sha256:18f4cc26c9ffa7f20a359298be7deadac5c607c8e03a02b8119f1a5fc2f82c99
 USER nonroot:nonroot
 COPY --from=builder /out/shard-proxy /usr/local/bin/shard-proxy
 ENTRYPOINT ["/usr/local/bin/shard-proxy"]
