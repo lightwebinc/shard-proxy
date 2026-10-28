@@ -167,11 +167,16 @@ type Recorder struct {
 	framesFragmented metric.Int64Counter
 	fragmentsEmitted metric.Int64Counter
 
-	// Coalescing counters (BRC-142) — cold path: fire once per flushed bundle.
+	// Coalescing counters (BRC-142): once per flushed bundle, and on a spine
+	// once per relayed bundle, so each (iface, worker, reason) series keeps its
+	// measurement options in a copy-on-write cache rather than rebuilding its
+	// attribute sets on every call.
 	coalesceBundles      metric.Int64Counter
 	coalesceMembers      metric.Int64Counter
 	coalesceFlush        metric.Int64Counter
 	coalesceMembersHisto metric.Int64Histogram
+	coalesceSeries       atomic.Pointer[map[coalesceKey]*coalesceOpts]
+	coalesceSeriesMu     sync.Mutex // guards coalesceSeries copy-on-write
 
 	// Loopback tee to the co-located retry cache / listener.
 	teeFailed metric.Int64Counter
@@ -663,20 +668,57 @@ func (r *Recorder) FrameFragmented(workerID int, k int) {
 // per frame), so it uses OTel like FrameFragmented.
 func (r *Recorder) CoalesceFlushed(iface string, workerID, n int, reason string) {
 	ctx := context.Background()
-	opt := metric.WithAttributes(
-		attribute.Int("worker", workerID),
-		ifaceAttr(iface),
-	)
-	r.coalesceFlush.Add(ctx, 1, metric.WithAttributes(
-		attribute.Int("worker", workerID),
-		ifaceAttr(iface),
-		attribute.String("reason", reason),
-	))
+	o := r.coalesceOptions(iface, workerID, reason)
+	r.coalesceFlush.Add(ctx, 1, o.flush)
 	if n > 0 {
-		r.coalesceBundles.Add(ctx, 1, opt)
-		r.coalesceMembers.Add(ctx, int64(n), opt)
-		r.coalesceMembersHisto.Record(ctx, int64(n), opt)
+		r.coalesceBundles.Add(ctx, 1, o.bundle)
+		r.coalesceMembers.Add(ctx, int64(n), o.bundle)
+		r.coalesceMembersHisto.Record(ctx, int64(n), o.bundle)
 	}
+}
+
+type coalesceKey struct {
+	iface  string
+	worker int
+	reason string
+}
+
+// coalesceOpts holds one coalesce series' measurement options: flush carries
+// worker, iface and reason; bundle carries worker and iface.
+type coalesceOpts struct {
+	flush, bundle metric.MeasurementOption
+}
+
+// coalesceOptions returns the cached options for (iface, workerID, reason),
+// building them on first sight. Reads are lock-free.
+func (r *Recorder) coalesceOptions(iface string, workerID int, reason string) *coalesceOpts {
+	k := coalesceKey{iface: iface, worker: workerID, reason: reason}
+	if m := r.coalesceSeries.Load(); m != nil {
+		if o, ok := (*m)[k]; ok {
+			return o
+		}
+	}
+	r.coalesceSeriesMu.Lock()
+	defer r.coalesceSeriesMu.Unlock()
+	if m := r.coalesceSeries.Load(); m != nil {
+		if o, ok := (*m)[k]; ok {
+			return o
+		}
+	}
+	o := &coalesceOpts{
+		flush: metric.WithAttributeSet(attribute.NewSet(
+			attribute.Int("worker", workerID), ifaceAttr(iface), attribute.String("reason", reason))),
+		bundle: metric.WithAttributeSet(attribute.NewSet(attribute.Int("worker", workerID), ifaceAttr(iface))),
+	}
+	nm := make(map[coalesceKey]*coalesceOpts)
+	if old := r.coalesceSeries.Load(); old != nil {
+		for kk, v := range *old {
+			nm[kk] = v
+		}
+	}
+	nm[k] = o
+	r.coalesceSeries.Store(&nm)
+	return o
 }
 
 // TeeFailed records datagrams a loopback tee could not deliver. kind is "retry"

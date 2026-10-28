@@ -453,3 +453,67 @@ func BenchmarkPacketForwarded(b *testing.B) {
 		rec.PacketForwarded("eth0", i&3, uint32(i&0xff), 256)
 	}
 }
+
+// Cached coalesce options must export the same series as building them per
+// call: one flush series per (worker, reason), one bundle and members series
+// per worker, with the counts recorded.
+func TestCoalesceFlushedSeries(t *testing.T) {
+	rec := newTestRecorder(t, 2)
+	for i := 0; i < 3; i++ {
+		rec.CoalesceFlushed("eth1", 0, 12, "relay")
+	}
+	rec.CoalesceFlushed("eth1", 1, 5, "batch")
+	rec.CoalesceFlushed("eth1", 1, 0, "encode_error")
+
+	mfs, err := rec.Gatherer().Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	got := map[string]float64{}
+	for _, mf := range mfs {
+		switch mf.GetName() {
+		case "bsp_coalesce_flush_total", "bsp_coalesce_bundles_total", "bsp_coalesce_members_total":
+		default:
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			key := mf.GetName()
+			for _, l := range m.GetLabel() {
+				switch l.GetName() {
+				case "worker", "reason", "network_interface_name":
+					key += " " + l.GetName() + "=" + l.GetValue()
+				}
+			}
+			got[key] = m.GetCounter().GetValue()
+		}
+	}
+	want := map[string]float64{
+		"bsp_coalesce_flush_total network_interface_name=eth1 reason=relay worker=0":        3,
+		"bsp_coalesce_flush_total network_interface_name=eth1 reason=batch worker=1":        1,
+		"bsp_coalesce_flush_total network_interface_name=eth1 reason=encode_error worker=1": 1,
+		"bsp_coalesce_bundles_total network_interface_name=eth1 worker=0":                   3,
+		"bsp_coalesce_bundles_total network_interface_name=eth1 worker=1":                   1,
+		"bsp_coalesce_members_total network_interface_name=eth1 worker=0":                   36,
+		"bsp_coalesce_members_total network_interface_name=eth1 worker=1":                   5,
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %v, want %v", k, got[k], v)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("got %d coalesce series, want %d: %v", len(got), len(want), got)
+	}
+}
+
+func BenchmarkCoalesceFlushed(b *testing.B) {
+	rec, err := New("bench", 1, "", 30*time.Second)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer rec.Shutdown(context.Background())
+	b.ReportAllocs()
+	for b.Loop() {
+		rec.CoalesceFlushed("eth1", 0, 12, "relay")
+	}
+}
