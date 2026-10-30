@@ -245,7 +245,10 @@ func (fw *Forwarder) ProcessBEEF(egr *Egress, raw []byte, src net.Addr, workerID
 	// declared length is what downstream reassembly would allocate against.
 	// The payload is either the submission record verbatim or a bare object;
 	// the bound is on the OBJECT (BRC-149's ingress MUST), so a record may
-	// exceed it by its envelope and nothing more.
+	// exceed it by its envelope and nothing more. It is the submitter's own
+	// bound (beefObjectBoundFor): an authenticated record SubmitBEEF admitted
+	// above the open bound must not be dropped here one step later. Only an
+	// object over the open bound pays for the policy lookup.
 	object, topics, err := objfmt.SplitBEEFPayload(bf.Payload)
 	if err != nil {
 		if fw.rec != nil {
@@ -253,7 +256,7 @@ func (fw *Forwarder) ProcessBEEF(egr *Egress, raw []byte, src net.Addr, workerID
 		}
 		return
 	}
-	if fw.beefMaxObject > 0 && len(object) > fw.beefMaxObject {
+	if fw.beefMaxObject > 0 && len(object) > fw.beefMaxObject && len(object) > fw.beefObjectBoundFor(src) {
 		if fw.rec != nil {
 			fw.rec.PacketDropped(egrIface(egr), workerID, "beef_oversize")
 		}

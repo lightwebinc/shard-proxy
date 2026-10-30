@@ -73,3 +73,38 @@ func TestBEEFRecordBoundPerSource(t *testing.T) {
 		t.Errorf("envelope = %d, want 983 (4 + 15 x 65 + 4)", beefRecordMaxEnvelope)
 	}
 }
+
+// D9 end to end: an authenticated record above the open bound is FORWARDED
+// (here as BRC-130 fragments), not admitted by SubmitBEEF and then dropped by
+// ProcessBEEF's own bound check; the same record from an open source is still
+// refused, and so is a pre-framed object from it.
+func TestSubmitBEEF_AuthenticatedAboveOpenBound(t *testing.T) {
+	fw, _ := makeBEEFForwarder(t)
+	fw.SetFragMTU(1280)
+	fw.SetBEEF(fw.beefEngine, 1024)
+	auth := net.ParseIP("fd00:57::5")
+	fw.SetBEEFSubmitPolicy(&boundPolicy{auth: auth, lift: 8192})
+	conn, _ := openLoopbackUDP(t)
+
+	big := make([]byte, 4096)
+	copy(big, beefTestObj)
+	rec := buildBEEFRecordBytes(t, []string{"tm_big"}, big)
+
+	egr := makeEgress(t, fw, conn)
+	fw.SubmitBEEF(egr, rec, &net.TCPAddr{IP: auth}, 0)
+	if got := countEnqueued(egr); got < 2 {
+		t.Fatalf("authenticated 4 KiB record over a 1 KiB open bound: enqueued %d, want its fragments", got)
+	}
+
+	open := &net.TCPAddr{IP: net.ParseIP("2001:db8::9")}
+	egr = makeEgress(t, fw, conn)
+	fw.SubmitBEEF(egr, buildBEEFRecordBytes(t, []string{"tm_big2"}, big), open, 0)
+	if got := countEnqueued(egr); got != 0 {
+		t.Fatalf("open source over the open bound: enqueued %d, want 0", got)
+	}
+	egr = makeEgress(t, fw, conn)
+	fw.ProcessBEEF(egr, buildBEEFFrameBytes(t, "tm_big3", big), &net.UDPAddr{IP: open.IP}, 0)
+	if got := countEnqueued(egr); got != 0 {
+		t.Fatalf("pre-framed from an open source over the open bound: enqueued %d, want 0", got)
+	}
+}
