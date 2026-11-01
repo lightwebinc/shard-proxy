@@ -151,48 +151,94 @@ func egrIface(egr *Egress) string {
 // verbatim via [Forwarder.ProcessBEEF], with DeliverCount from the policy
 // (1 without one). rec must be the complete record (one record per UDP
 // datagram; the TCP lane splits the stream via objfmt.Reader).
+//
+// It is [Forwarder.PrepareBEEF] then [Forwarder.DispatchBEEF]: a lane that
+// reads ahead calls the two apart, the first off its dispatching goroutine.
 func (fw *Forwarder) SubmitBEEF(egr *Egress, rec []byte, src net.Addr, workerID int) {
-	result := "ok"
-	defer func() {
-		if fw.rec != nil {
-			fw.rec.BEEFSubmission(result)
-		}
-	}()
+	fw.DispatchBEEF(egr, fw.PrepareBEEF(rec, src), src, workerID)
+}
 
+// PreparedBEEF is a submission record checked and framed for the plane by
+// [Forwarder.PrepareBEEF], for [Forwarder.DispatchBEEF] to admit.
+type PreparedBEEF struct {
+	// frame is the FrameVer 0x09 frame, nil when the record was refused.
+	frame []byte
+	// result is the submission's result, "ok" when framed.
+	result  string
+	topics  int
+	deliver int
+}
+
+// Len is the bytes the prepared frame holds: what a lane reading ahead
+// counts against its bound.
+func (p *PreparedBEEF) Len() int {
+	if p == nil {
+		return 0
+	}
+	return len(p.frame)
+}
+
+// PrepareBEEF is the part of SubmitBEEF that needs no order: the record's
+// grammar, the object's bound and marker, the DeliverCount from the policy,
+// and the frame with its ContentID (a SHA-256d of the whole object). A lane
+// that reads ahead runs it on its reader goroutine, in parallel with the
+// dispatch of the record before; the frame is a copy, so rec may be reused
+// once it returns. Nothing here is a reject: the result is recorded by
+// DispatchBEEF.
+func (fw *Forwarder) PrepareBEEF(rec []byte, src net.Addr) *PreparedBEEF {
+	p := &PreparedBEEF{result: "ok"}
 	if fw.beefEngine == nil {
-		result = "disabled"
-		return
+		p.result = "disabled"
+		return p
 	}
 	r, n, err := objfmt.DecodeBEEFRecord(rec)
 	if err != nil || n != len(rec) {
-		result = "malformed"
-		return
+		p.result = "malformed"
+		return p
 	}
 	if maxObj := fw.beefObjectBoundFor(src); maxObj > 0 && len(r.Object) > maxObj {
-		result = "oversize"
-		return
+		p.result = "oversize"
+		return p
 	}
 	if !objfmt.IsBEEFObject(r.Object) {
-		result = "bad_marker"
-		return
+		p.result = "bad_marker"
+		return p
 	}
 	// One record, one frame, at any topic count: the payload is the record
 	// verbatim so every name the publisher wrote reaches the subscriber, and
 	// DeliverCount bounds how many of the leading names delivery edges match.
 	// The open path (no policy) delivers the first topic only, which is what
 	// keeps a free, anonymous record from becoming fan-out; a policy may lift
-	// an identified source to its cap. Nothing here is a reject.
+	// an identified source to its cap.
 	deliver := fw.beefDeliverCount(src, len(r.Topics))
 	buf, err := objfmt.BEEFMulticastRecord(rec, deliver)
 	if err != nil {
-		result = "malformed"
+		p.result = "malformed"
+		return p
+	}
+	p.frame, p.topics, p.deliver = buf, len(r.Topics), deliver
+	return p
+}
+
+// DispatchBEEF admits a prepared record: the submission is recorded, and a
+// framed one is metered and processed in order. The frame's ContentID was
+// computed by PrepareBEEF from the bytes it framed, so it is not computed a
+// second time to be checked.
+func (fw *Forwarder) DispatchBEEF(egr *Egress, p *PreparedBEEF, src net.Addr, workerID int) {
+	if p == nil {
 		return
 	}
 	if fw.rec != nil {
-		fw.rec.IngressMetered(metrics.IngressClassBEEF, false, len(buf))
-		fw.rec.BEEFTopics(len(r.Topics), deliver)
+		defer fw.rec.BEEFSubmission(p.result)
 	}
-	fw.ProcessBEEF(egr, buf, src, workerID)
+	if p.frame == nil {
+		return
+	}
+	if fw.rec != nil {
+		fw.rec.IngressMetered(metrics.IngressClassBEEF, false, len(p.frame))
+		fw.rec.BEEFTopics(p.topics, p.deliver)
+	}
+	fw.processBEEF(egr, p.frame, src, workerID, false)
 }
 
 // beefDeliverCount resolves how many of a record's n leading topics are
@@ -222,7 +268,15 @@ func (fw *Forwarder) beefDeliverCount(src net.Addr, n int) int {
 //
 // raw must remain valid until egr.Flush returns. egr may be nil for tests.
 // A nil src (spine re-emit) skips stamping, mirroring [Forwarder.Process].
+// The frame's ContentID is checked against its payload: a pre-framed
+// submission presents its own.
 func (fw *Forwarder) ProcessBEEF(egr *Egress, raw []byte, src net.Addr, workerID int) {
+	fw.processBEEF(egr, raw, src, workerID, true)
+}
+
+// processBEEF is ProcessBEEF; checkContentID is false for a frame this
+// forwarder built itself (DispatchBEEF).
+func (fw *Forwarder) processBEEF(egr *Egress, raw []byte, src net.Addr, workerID int, checkContentID bool) {
 	if fw.beefEngine == nil {
 		if fw.rec != nil {
 			fw.rec.PacketDropped(egrIface(egr), workerID, "beef_disabled")
@@ -337,7 +391,8 @@ func (fw *Forwarder) ProcessBEEF(egr *Egress, raw []byte, src net.Addr, workerID
 	// "identity is the bytes" for consumers that trust the field.
 	//
 	// The record path never had this hole: it computes the ContentID itself
-	// (SubmitBEEF above). Only pre-framing can present one.
+	// (PrepareBEEF above), so a frame it built is not hashed a second time
+	// here (checkContentID false). Only pre-framing can present one.
 	//
 	// Placed AFTER the rate budget and BEFORE the claim, deliberately. SHA-256d
 	// costs ~2.8us at 256B and ~5.6ms at 1MiB (measured 2026-09-15), so hashing
@@ -346,7 +401,7 @@ func (fw *Forwarder) ProcessBEEF(egr *Egress, raw []byte, src net.Addr, workerID
 	// chose. Relay and spine re-emission (src == nil) is exempt for the same
 	// reason the budget exempts it: the frame was verified at the door where it
 	// entered, and re-hashing at every hop multiplies the cost fleet-wide.
-	if src != nil && bf.ContentID != objfmt.ContentID(bf.Payload) {
+	if checkContentID && src != nil && bf.ContentID != objfmt.ContentID(bf.Payload) {
 		if fw.rec != nil {
 			fw.rec.PacketDropped(egrIface(egr), workerID, "beef_bad_contentid")
 		}

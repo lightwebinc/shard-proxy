@@ -101,6 +101,7 @@ func TestRetryTeeDrainsWholeBatchOneMessageAtATime(t *testing.T) {
 		egr.EnqueueData([]byte(p), dst, uint32(i), 0)
 	}
 	egr.Flush()
+	egr.tee.wait()
 
 	if len(tw.sent) != len(want) {
 		t.Fatalf("tee wrote %d of %d copies (%v) — the cache would MISS for the rest",
@@ -131,6 +132,7 @@ func TestLocalMirrorDrainsWholeBatchOneMessageAtATime(t *testing.T) {
 		egr.EnqueueData([]byte{byte('a' + i)}, dst, uint32(i), 0)
 	}
 	egr.Flush()
+	egr.mirror.wait()
 
 	if len(mw.sent) != 6 {
 		t.Fatalf("mirror wrote %d of 6 copies — own-source frames never reach the "+
@@ -158,6 +160,7 @@ func TestFlushViaTeeDrainsWholeBatch(t *testing.T) {
 		egr.EnqueueData([]byte{byte('0' + i)}, dst, uint32(i), 0)
 	}
 	egr.FlushVia(func(int, []byte, *net.UDPAddr) error { return nil })
+	egr.tee.wait()
 
 	if len(tw.sent) != 4 {
 		t.Fatalf("FlushVia tee wrote %d of 4 copies", len(tw.sent))

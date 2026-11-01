@@ -603,8 +603,10 @@ func (e *Egress) Flush() {
 		clear(e.msgs[i])
 		e.msgs[i] = e.msgs[i][:0]
 	}
-	// Tee AFTER real egress: the forward path must never wait on a cache-fill,
-	// and pooled buffers are still valid until the release below.
+	// Tee AFTER real egress: the forward path must never wait on a cache-fill.
+	// The tee and the mirror took their copies at enqueue, and each flush
+	// hands the batch to its own sender, so the pooled buffers are free once
+	// the real egress is written.
 	if e.tee != nil {
 		e.tee.flush()
 	}
