@@ -48,7 +48,7 @@ type Config struct {
 	// frames on dedicated single-class TCP ports, reframed to the fabric
 	// internally (subtree → BRC-132, block → BRC-131 carrying the BRC-144 body
 	// verbatim). These ports are privileged and MUST be bound tunnel-side /
-	// firewalled to miner-tier peers — only the transaction port (8725) is
+	// firewalled to miner-tier peers; only the transaction port (8725) is
 	// public. Standard numbers: 8726 subtree, 8727 block. 0 = disabled.
 	SubtreeListenPort int
 	BlockListenPort   int
@@ -57,7 +57,7 @@ type Config struct {
 	// (0xBEEF-tagged envelopes) and framed FrameVer 0x09 input are accepted
 	// on the public transaction port regardless of these knobs.
 	// BEEFListenPort optionally binds a dedicated single-class lane
-	// (standard 8728) for flow separation / load balancing — never
+	// (standard 8728) for flow separation / load balancing, never
 	// admission. BEEFShardBits is the plane's shard-bit width (band
 	// 0x1000 + 2^bits groups); BEEFMaxObjectBytes bounds one accepted
 	// object (the spec's ingress MUST-bound).
@@ -79,12 +79,13 @@ type Config struct {
 
 	// RequireEF makes the ingress EF-native: transaction submissions must be
 	// BRC-30 Extended Format; raw BRC-12/BRC-124 submissions are rejected. Off by
-	// default (accepts raw + EF). Relayed (already-stamped) frames are unaffected.
+	// default (accepts raw + EF). Stamped frames are not exempt; a relay lane
+	// declares itself with AllowStampedIngress.
 	RequireEF bool
 
 	// AllowStampedIngress admits framed BRC-124/BRC-128 input that already
 	// carries a SeqNum (a frame another proxy stamped and emitted). Off by
-	// default — an ingress proxy accepts submissions, not relay. Enable on a
+	// default: an ingress proxy accepts submissions, not relay. Enable on a
 	// spine collect lane or a relay hop. See
 	// forwarder.Forwarder.SetAllowStampedIngress.
 	AllowStampedIngress bool
@@ -103,13 +104,13 @@ type Config struct {
 
 	// Sharding
 	ShardBits   uint   // Number of txid prefix bits used as the group key (1–12)
-	NumGroups   uint32 // Derived: 1 << ShardBits — total distinct multicast groups
-	MCScope     string // "site" | "global" — see shard.Scope. Legacy values "link"/"org" are still accepted in ASM mode.
-	MCPrefix    uint16 // Derived from (SourceMode, MCScope) — upper 16 bits of the IPv6 group address
+	NumGroups   uint32 // Derived: 1 << ShardBits, the total distinct multicast groups
+	MCScope     string // "site" | "global"; see shard.Scope. Legacy values "link"/"org" are still accepted in ASM mode.
+	MCPrefix    uint16 // Derived from (SourceMode, MCScope): upper 16 bits of the IPv6 group address
 	MCGroupID   uint16 // IANA group-id occupying bytes 12–13 (default 0x000B)
-	SourceMode  string // "asm" (default) | "ssm" — selects ASM (FF0x) vs SSM (FF3x) addressing per RFC 4607
+	SourceMode  string // "asm" (default) | "ssm"; selects ASM (FF0x) vs SSM (FF3x) addressing per RFC 4607
 	BindSource  string // Optional IPv6 literal; when SSM is enabled each proxy replica MUST bind a distinct source IPv6 so receivers can pre-declare it in (S,G) joins
-	StampSource bool   // When true (default), the proxy AUTHORITATIVELY stamps the BRC HashKey from the OBSERVED packet source IP — overriding any value the sender supplied — so the per-flow identity is the real ingress source. This is what makes own-traffic exclusion per-consumer in a collapsed/direct-ingress edge (the proxy sees each consumer's distinct source). Set false ONLY when the proxy sits behind a load balancer / proxy that rewrites the source (every consumer would then appear as the LB's address) — there the upstream-supplied HashKey is trusted instead.
+	StampSource bool   // When true (default), the proxy AUTHORITATIVELY stamps the BRC HashKey from the OBSERVED packet source IP (overriding any value the sender supplied) so the per-flow identity is the real ingress source. This is what makes own-traffic exclusion per-consumer in a collapsed/direct-ingress edge (the proxy sees each consumer's distinct source). Set false ONLY when the proxy sits behind a load balancer / proxy that rewrites the source (every consumer would then appear as the LB's address); there the upstream-supplied HashKey is trusted instead.
 
 	// Runtime
 	NumWorkers   int           // Worker goroutine count; defaults to runtime.NumCPU()
@@ -122,7 +123,7 @@ type Config struct {
 	// exceeds fragDataSize are split into BRC-130 fragment datagrams.
 	//
 	// ON by default at the Ethernet baseline. Disabling it does NOT make large
-	// frames "unfragmented" — it makes them UNDELIVERABLE: an unfragmented
+	// frames "unfragmented"; it makes them UNDELIVERABLE: an unfragmented
 	// BRC-124 frame occupies 40 (IPv6) + 8 (UDP) + 92 (header) + payload, so a
 	// payload over MTU-140 becomes a single oversize datagram that can only
 	// cross the fabric via IPv6 IP-layer fragmentation, which is exactly what
@@ -241,7 +242,7 @@ func Load() (*Config, error) {
 	flag.BoolVar(&c.RequireBlockPoW, "require-block-pow", envBool("REQUIRE_BLOCK_POW", true),
 		"gate BRC-131 block announces on a cheap stateless proof-of-work check of the in-frame header (permissionless: validates work, not identity)")
 	flag.BoolVar(&c.RequireEF, "require-ef", envBool("REQUIRE_EF", false),
-		"EF-native ingress: reject raw BRC-12/BRC-124 transaction submissions; only Extended Format (BRC-30) is admitted (relayed frames unaffected)")
+		"EF-native ingress: reject raw BRC-12/BRC-124 transaction submissions; only Extended Format (BRC-30) is admitted (stamped frames are not exempt)")
 	flag.BoolVar(&c.AllowStampedIngress, "allow-stamped-ingress", envBool("ALLOW_STAMPED_INGRESS", false),
 		"admit framed BRC-124/BRC-128 input that already carries a SeqNum (another proxy's output). Off by default: an ingress proxy accepts submissions, not relay. Enable on a spine collect lane or relay hop")
 	flag.BoolVar(&c.VerifySubtreeRoot, "verify-subtree-root", envBool("VERIFY_SUBTREE_ROOT", true),
@@ -374,7 +375,7 @@ func Load() (*Config, error) {
 	}
 
 	// The TCP-family ports (reliable ingress + the two push-ingest lanes) must
-	// be mutually distinct — they all bind tcp6. UDP ingress is a separate
+	// be mutually distinct, since they all bind tcp6. UDP ingress is a separate
 	// transport namespace and may share a number.
 	tcpPorts := map[int]string{}
 	for _, p := range []struct {

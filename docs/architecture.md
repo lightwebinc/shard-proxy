@@ -10,7 +10,7 @@ TopicID on the BEEF plane; a fixed control-plane group for BRC-134 anchors),
 then retransmits the original bytes verbatim to all configured egress
 interfaces. An already-coalesced BRC-142 bundle arriving over UDP is relayed
 verbatim to the group in its header. Block (BRC-131) and subtree-data (BRC-132) frames
-never enter through the public ingress — those sockets are transaction-class
+never enter through the public ingress: those sockets are transaction-class
 and drop them (`bsp_privileged_frame_rejected_total`). They originate from the
 privileged BRC-143/144 push lanes (`-subtree-listen-port` / `-block-listen-port`),
 which reframe push objects into BRC-132/BRC-131 before the same forwarder
@@ -51,9 +51,9 @@ The scope nibble `X` is derived from `(source-mode, scope)` via
 `-source-mode=ssm` switches every data-plane group to the `FF3x::/32`
 range (RFC 4607). The egress socket is bound to `-bind-source`
 (a distinct IPv6 per replica) so SSM receivers can pre-declare this
-proxy in their `(S,G)` join calls — anycast / ECMP-shared sources
+proxy in their `(S,G)` join calls; anycast / ECMP-shared sources
 break PIM-SSM RPF. See the
-[SSM Support Plan](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#source-specific-multicast-ssm)
+[Source-Specific Multicast design](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#source-specific-multicast-ssm)
 for fabric prerequisites (PIM-SSM, MLDv2, raised `mld_max_msf`).
 
 ## Control Groups
@@ -64,21 +64,21 @@ the BRC-129 shard zone `0x0000`–`0x0FFF`) are defined in `shard-common/shard/c
 
 | Constant | Index | Canonical Address (group-id `0x000B`) | Purpose |
 |---|---|---|---|
-| `GroupBlockHeader` | 0xFFFA | egress-scope `FF0X::<egress-gid>:FFFA` | Block header egress channel (BRC-135) — emitted by shard-listener's header egress; the proxy never sends on it |
+| `GroupBlockHeader` | 0xFFFA | egress-scope `FF0X::<egress-gid>:FFFA` | Block header egress channel (BRC-135), emitted by shard-listener's header egress; the proxy never sends on it |
 | `GroupSubtreeDataAnnounce` | 0xFFFB | FF05::B:FFFB (data-plane scope) | BRC-132 subtree data frames |
 | `GroupSubtreeGroupAnnounce` | 0xFFFC | FF05::B:FFFC (data-plane scope) | BRC-127 subtree group announcements |
 | `GroupBeacon` | 0xFFFD | FF05::B:FFFD (site) / FF0E::B:FFFD (global) | ADVERT beacon (BRC-126 discovery) + BRC-139 shard manifests |
 | `GroupBlockBroadcast` | 0xFFFE | FF05::B:FFFE (data-plane scope; FF0E::B:FFFE when deployed global) | BRC-131 block control + BRC-133 coinbase (deprecated) + BRC-134 anchor frames |
 
-BRC-129 names global scope (FF0E) as the deployment posture for `GroupBlockBroadcast`, because block headers, the coinbase (inline in the block frame), and anchor transactions must reach every subscriber across organisational boundaries. The implementation derives the address from the configured `-scope` like every other control group: a site-scoped deployment emits `FF05::B:FFFE`, and an inter-domain one sets `-scope global`.
+BRC-129 names global scope (FF0E) as the deployment posture for `GroupBlockBroadcast`, because block headers, the coinbase (inline in the block frame), and anchor transactions must reach every subscriber across organizational boundaries. The implementation derives the address from the configured `-scope` like every other control group: a site-scoped deployment emits `FF05::B:FFFE`, and an inter-domain one sets `-scope global`.
 
-Per BRC-129 zoning, shard group indices are bounded to `0x0000`–`0x0FFF` — `-shard-bits`
-is at most 12 for conformant deployments (the flag validator enforces `[1, 12]`) — so
+Per BRC-129 zoning, shard group indices are bounded to `0x0000`–`0x0FFF`, so `-shard-bits`
+is at most 12 for conformant deployments (the flag validator enforces `[1, 12]`) and
 user shard indices never overlap the control groups (`0xFFFA`–`0xFFFE`).
 
 ## BRC-131 Block Control Frames (FrameVerV4)
 
-BRC-131 frames do not arrive via the public UDP/TCP ingress — those sockets are
+BRC-131 frames do not arrive via the public UDP/TCP ingress: those sockets are
 transaction-class, and `DispatchClass` drops version byte `0x04` frames there
 (counted in `bsp_privileged_frame_rejected_total`). They originate from the
 privileged block push lane (`-block-listen-port`, standard 8727): `objingress`
@@ -107,7 +107,7 @@ Two `MsgType` values are defined (byte 7 of the header):
 | MsgType | Value | Payload |
 |---|---|---|
 | BlockAnnounce | 0x01 | 80-byte block header + CoinbaseTxID + subtree hashes |
-| CoinbaseTx | 0x02 | Raw serialised coinbase transaction. Deprecated (BRC-133): the push lane never produces it, since the coinbase travels inline in the BRC-144 body; the listener's default-on block-control gate drops one (`coinbase_legacy`). Retained and reserved so a future design could carry blocks and their coinbase separately on the fabric and recombine them at the edges |
+| CoinbaseTx | 0x02 | Raw serialized coinbase transaction. Deprecated (BRC-133): the push lane never produces it, since the coinbase travels inline in the BRC-144 body; the listener's default-on block-control gate drops one (`coinbase_legacy`). Retained and reserved so a future design could carry blocks and their coinbase separately on the fabric and recombine them at the edges |
 
 ## BRC-132 Subtree Data Frames (FrameVerV5)
 
@@ -153,17 +153,17 @@ format is decoded by `shard-common/bundle` (not `frame.Decode`, which returns
 `ErrBadVer` for `0x08`); it is specified once in the canonical
 [BRC-142 spec](https://github.com/lightwebinc/shard-common/blob/main/docs/protocol.md#3a-brc-142-coalescing-bundle-frame-format)
 and the public
-[bsv-multicast/docs/brc-142-coalescing-frame.md](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-142-coalescing-frame.md)
-— not restated here.
+[bsv-multicast/docs/brc-142-coalescing-frame.md](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-142-coalescing-frame.md),
+and is not restated here.
 
 **Within-batch origin coalescing.** Coalescing is bounded to a single receive
 batch. As a worker dispatches a batch, eligible transactions are bucketed by
 their `(sender, group, subtree)` flow in a per-`Egress` `coalBuffer`
 (`forwarder/coalesce.go`); member payloads alias the worker's reused receive
-buffers. At batch end — immediately before `Egress.Flush` overwrites those
-buffers — `Forwarder.FlushCoalesced` packs each bucket into one or more owned
-bundle datagrams (up to `-coalesce-max-bytes` — a path-MTU budget, IPv6+UDP
-headers included — and `-coalesce-max-members`) and
+buffers. At batch end (immediately before `Egress.Flush` overwrites those
+buffers), `Forwarder.FlushCoalesced` packs each bucket into one or more owned
+bundle datagrams (up to `-coalesce-max-bytes`, a path-MTU budget with IPv6+UDP
+headers included, and `-coalesce-max-members`) and
 enqueues them. Each bundle draws its `HashKey`/`SeqNum` from the **same
 per-flow striped counter** (`nextSeq`) that stamps individual frames, so a
 flow's bundles interleave contiguously with any individual frames it also
@@ -172,11 +172,11 @@ regardless of frame version, and BRC-126 NACK/retry treats a bundle as one "fat
 frame."
 
 **Verbatim spine relay (origin-only rule).** Coalescing runs **only at the
-emitting origin** — the collapsed / ingress proxy that first sees the individual
+emitting origin**: the collapsed / ingress proxy that first sees the individual
 transactions. A regional spine that *relays* an already-coalesced bundle takes
 the `Forwarder.ProcessBundle` path: it does a cheap structural check (BSV magic +
 self-consistent `PayloadLen`), reads the destination `GroupIdx` from the bundle
-header (offset 56 — a bundle is bound to the single group it was built for, not
+header (offset 56; a bundle is bound to the single group it was built for, not
 re-derived from a member TxID), and re-emits the datagram **unchanged**. A bundle
 is never re-coalesced, re-stamped, or split in this proxy: one bundle in → one
 multicast datagram out. Decoalesce (split back to
@@ -188,7 +188,7 @@ happen at the **delivery edge** (listener), not here.
 Each UDP worker goroutine owns one ingress socket bound via `SO_REUSEPORT`
 plus one egress socket per configured interface. The kernel distributes
 incoming datagrams across all workers with no userspace coordination.
-Forwarding logic is centralised in the shared `forwarder.Forwarder`.
+Forwarding logic is centralized in the shared `forwarder.Forwarder`.
 
 Workers process datagrams in batches: each iteration pulls up to
 `-recv-batch` ingress packets via `ipv6.PacketConn.ReadBatch` (one
@@ -212,8 +212,8 @@ and UDP share the same `forwarder.Forwarder` and egress targets.
 |---|---|---|---|---|
 | `0x01` (BRC-12) | Transaction | 44 bytes | `PayLen` bytes | `Process` |
 | `0x02` (BRC-124/BRC-128) | Transaction | 92 bytes | 48 more + `PayLen` | `Process` |
-| `0x04` (BRC-131) | Block control | 92 bytes | 48 more + `PayLen` | dropped — `DispatchClass` rejects privileged frames on the transaction-class port |
-| `0x05` (BRC-132) | Subtree data | 92 bytes | 48 more + `PayLen` | dropped — `DispatchClass` rejects privileged frames on the transaction-class port |
+| `0x04` (BRC-131) | Block control | 92 bytes | 48 more + `PayLen` | dropped; `DispatchClass` rejects privileged frames on the transaction-class port |
+| `0x05` (BRC-132) | Subtree data | 92 bytes | 48 more + `PayLen` | dropped; `DispatchClass` rejects privileged frames on the transaction-class port |
 | `0x06` (BRC-134) | Anchor tx | 92 bytes | 48 more + `PayLen` | `ProcessAnchor` |
 | `0x09` (BRC-149) | BEEF object | 92 bytes | 48 more + `PayLen` (bounded by `-beef-max-object-bytes`) | `ProcessBEEF` |
 | `0x30` (MsgType, BRC-127) | SubtreeGroupAnnounce | 64 bytes | 20 more (no payload) | `ForwardControl` |
@@ -243,11 +243,11 @@ Wire formats are specified in
 
 The proxy processes each incoming datagram in two steps:
 
-1. **Decode** — parse the frame header (BRC-12 or BRC-124/BRC-128); drop with a debug log on
+1. **Decode**: parse the frame header (BRC-12 or BRC-124/BRC-128); drop with a debug log on
    bad magic, unsupported version, oversized payload, or truncated datagram.
    The TxID is extracted to derive the destination multicast group.
 
-2. **Forward** — for BRC-124 frames, if `SeqNum` (`raw[48:56]`) is **non-zero**
+2. **Forward**: for BRC-124 frames, if `SeqNum` (`raw[48:56]`) is **non-zero**
    the sender has pre-stamped the frame: it is forwarded verbatim when
    `-allow-stamped-ingress` is set and dropped (`stamped_ingress`) otherwise
    (see [Stamped ingress](configuration.md#stamped-ingress)). If `SeqNum`
@@ -297,44 +297,44 @@ authoritative reason set is the `forwarder` package; see the [Metrics Reference]
 
 ## Wire Format
 
-### BRC-124/BRC-128 (current — 92 bytes)
+### BRC-124/BRC-128 (current, 92 bytes)
 
 ```text
 Offset  Size  Align  Field
 ------  ----  -----  -----
-     0     4   —     Network magic         0xE3E1F3E8
-     4     2   —     Protocol ver          0x02BF
-     6     1   —     Frame version         0x02 (BRC-124/BRC-128)
-     7     1   —     Reserved              0x00
+     0     4   -     Network magic         0xE3E1F3E8
+     4     2   -     Protocol ver          0x02BF
+     6     1   -     Frame version         0x02 (BRC-124/BRC-128)
+     7     1   -     Reserved              0x00
      8    32   8B    Transaction ID        raw 256-bit txid (internal byte order)
     40     8   8B    HashKey               stable per-flow XXH64 identifier; 0 = unset
     48     8   8B    SeqNum                monotonic per-flow counter; 0 = unset
     56    32   8B    Subtree ID            32-byte batch identifier; zeros = unset
     88     4   8B    Payload length        uint32 BE
-    92     *   —     BSV tx payload        BRC-12 raw or BRC-30 EF (BRC-128)
+    92     *   -     BSV tx payload        BRC-12 raw or BRC-30 EF (BRC-128)
 ```
 
-### BRC-12 (legacy — 44 bytes, accepted, forwarded verbatim)
+### BRC-12 (legacy, 44 bytes, accepted, forwarded verbatim)
 
 ```text
 Offset  Size  Align  Field            Value / notes
 ------  ----  -----  -----            -------------
-     0     4   —     Network magic    0xE3E1F3E8
-     4     2   —     Protocol ver     0x02BF = 703
-     6     1   —     Frame version    0x01
-     7     1   —     Reserved         0x00
-     8    32   —     Transaction ID   raw 256-bit txid (internal byte order)
-    40     4   —     Payload length   uint32 BE
-    44     *   —     BSV tx payload   raw serialised transaction bytes
+     0     4   -     Network magic    0xE3E1F3E8
+     4     2   -     Protocol ver     0x02BF = 703
+     6     1   -     Frame version    0x01
+     7     1   -     Reserved         0x00
+     8    32   -     Transaction ID   raw 256-bit txid (internal byte order)
+    40     4   -     Payload length   uint32 BE
+    44     *   -     BSV tx payload   raw serialized transaction bytes
 ```
 
 BRC-12 frames carry no `HashKey`, `SeqNum`, or `SubtreeID` fields. By default the
 proxy accepts them and forwards the original bytes unchanged. Under `-require-ef`
-(EF-native ingress) legacy BRC-12 is **rejected** — it carries a raw transaction
+(EF-native ingress) legacy BRC-12 is **rejected**: it carries a raw transaction
 and the fabric is Extended-Format-only. See
 [Transaction ingress: framed, bare, and EF-native](#transaction-ingress-framed-bare-and-ef-native).
 
-### BRC-131 (FrameVerV4 — 92-byte header, block control)
+### BRC-131 (FrameVerV4, 92-byte header, block control)
 
 Layout is identical to BRC-124/BRC-128 except for the version byte (0x04), the MsgType
 in the Reserved field (byte 7), and the ContentID semantics (block hash or coinbase txid
@@ -343,55 +343,55 @@ instead of a transaction ID).
 ```text
 Offset  Size  Align  Field          Value / notes
 ------  ----  -----  -----          -------------
-     0     4   —     Network magic  0xE3E1F3E8
-     4     2   —     Protocol ver   0x02BF
-     6     1   —     Frame version  0x04 (BRC-131)
-     7     1   —     MsgType        0x01 = BlockAnnounce, 0x02 = CoinbaseTx (deprecated, reserved)
+     0     4   -     Network magic  0xE3E1F3E8
+     4     2   -     Protocol ver   0x02BF
+     6     1   -     Frame version  0x04 (BRC-131)
+     7     1   -     MsgType        0x01 = BlockAnnounce, 0x02 = CoinbaseTx (deprecated, reserved)
      8    32   8B    ContentID      Block hash (Announce) or CoinbaseTxID (Coinbase)
     40     8   8B    HashKey        Stamped by proxy; XXH64(senderIPv6 ∥ 0xFFFE ∥ zeros)
     48     8   8B    SeqNum         Monotonic per (sender, 0xFFFE, zeros) flow; 0 = unset
     56    32   8B    Reserved32     All zeros
-    88     4   —     PayloadLen     uint32 BE
-    92     *   —     Payload        BlockAnnounce or CoinbaseTx payload
+    88     4   -     PayloadLen     uint32 BE
+    92     *   -     Payload        BlockAnnounce or CoinbaseTx payload
 ```
 
-### BRC-132 (FrameVerV5 — 92-byte header)
+### BRC-132 (FrameVerV5, 92-byte header)
 
 ```text
 Offset  Size  Align  Field          Value / notes
 ------  ----  -----  -----          -------------
-     0     4   —     Network magic  0xE3E1F3E8
-     4     2   —     Protocol ver   0x02BF
-     6     1   —     Frame version  0x05 (BRC-132)
-     7     1   —     MsgType        0x01 = HashesOnly, 0x02 = FullNodes
+     0     4   -     Network magic  0xE3E1F3E8
+     4     2   -     Protocol ver   0x02BF
+     6     1   -     Frame version  0x05 (BRC-132)
+     7     1   -     MsgType        0x01 = HashesOnly, 0x02 = FullNodes
      8    32   8B    SubtreeID      SHA-256 Merkle root; also used as ContentID
     40     8   8B    HashKey        Stamped by proxy; XXH64(senderIPv6 ∥ 0xFFFB ∥ subtreeID)
     48     8   8B    SeqNum         Monotonic per (sender, 0xFFFB, subtreeID) flow; 0 = unset
     56    32   8B    LayoutPad32    All zeros
-    88     4   —     PayloadLen     uint32 BE
-    92     *   —     Payload        Subtree node data
+    88     4   -     PayloadLen     uint32 BE
+    92     *   -     Payload        Subtree node data
 ```
 
 The flow key includes `SubtreeID` so each distinct subtree is sequenced independently.
 
-### BRC-134 (FrameVerV6 — 92-byte header, anchor transaction)
+### BRC-134 (FrameVerV6, 92-byte header, anchor transaction)
 
 Layout is identical to BRC-124/BRC-128 except for the version byte (`0x06`). The
-`LayoutPad32` field at bytes 56–87 is always zeros — anchor frames have no subtree scope.
+`LayoutPad32` field at bytes 56–87 is always zeros; anchor frames have no subtree scope.
 
 ```text
 Offset  Size  Align  Field          Value / notes
 ------  ----  -----  -----          -------------
-     0     4   —     Network magic  0xE3E1F3E8
-     4     2   —     Protocol ver   0x02BF
-     6     1   —     Frame version  0x06 (BRC-134)
-     7     1   —     Reserved       0x00
+     0     4   -     Network magic  0xE3E1F3E8
+     4     2   -     Protocol ver   0x02BF
+     6     1   -     Frame version  0x06 (BRC-134)
+     7     1   -     Reserved       0x00
      8    32   8B    TxID           Anchor transaction ID (SHA256d, internal byte order)
     40     8   8B    HashKey        Stamped by proxy; XXH64(senderIPv6 ∥ 0xFFF9 ∥ zeros)
     48     8   8B    SeqNum         Monotonic per (sender, 0xFFF9, zeros) flow; 0 = unset
     56    32   8B    LayoutPad32    All zeros
-    88     4   —     PayloadLen     uint32 BE
-    92     *   —     Payload        Raw serialised anchor transaction
+    88     4   -     PayloadLen     uint32 BE
+    92     *   -     Payload        Raw serialized anchor transaction
 ```
 
 ## Transaction ingress: framed, bare, and EF-native
@@ -399,15 +399,15 @@ Offset  Size  Align  Field          Value / notes
 The transaction ingress port (`-udp-listen-port`, default 8725) accepts a
 submission in three shapes, distinguished by the leading bytes:
 
-- **Framed** — a BRC-124/BRC-128 (or legacy BRC-12) frame, which begins with the
+- **Framed**: a BRC-124/BRC-128 (or legacy BRC-12) frame, which begins with the
   BSV network magic `0xE3E1F3E8`. Decoded, dedup-claimed by TxID, stamped, and
-  forwarded — the relay hot path.
-- **Bare** — a header-stripped transaction (no frame). The magic is absent, so
+  forwarded: the relay hot path.
+- **Bare**: a header-stripped transaction (no frame). The magic is absent, so
   `DispatchClass` routes it to the bare path, wraps it into an unstamped
   BRC-124/128 frame, and drives it through the same forward path. One
-  transaction per datagram. This retires the need for a separate raw-tx port:
+  transaction per datagram. No separate raw-tx port is needed:
   submitters send bare transactions to the same 8725 as framed traffic.
-- **BEEF submission record** — a leading `0xBEEF` record tag (BRC-149).
+- **BEEF submission record**: a leading `0xBEEF` record tag (BRC-149).
   `DispatchClass` routes it to `SubmitBEEF`, which expands the record into one
   stamped `FrameVer 0x09` frame per submitted topic. BEEF is an open class, so
   records are admitted on every ingress class.
@@ -418,12 +418,12 @@ byte-identical; the bare branch is cold (submissions only).
 
 ### EF-native ingress (`-require-ef`)
 
-Teranode requires **Extended Format** (EF — the BRC-30 marker
+Teranode requires **Extended Format** (EF, the BRC-30 marker
 `00 00 00 00 00 EF` at payload bytes 4–9): a raw transaction (BRC-12) omits each
 input's funding value and locking script, which the stateless fabric cannot
-supply (extension needs a UTXO lookup — a wallet/submitter concern). With
+supply (extension needs a UTXO lookup, a wallet/submitter concern). With
 `-require-ef` set the ingress is EF-native: a transaction must be EF, or it is
-rejected —
+rejected:
 
 - a legacy BRC-12 (44-byte, FrameVerV1) frame,
 - a raw BRC-124 (92-byte, FrameVerV2 without the marker) frame, and
@@ -436,17 +436,16 @@ guard short-circuits to a single predicted branch when off, so there is no
 measurable hot-path cost either way (`forwarder` micro-benchmarks: relay and
 submission both within run-to-run noise of baseline).
 
-**Stamped frames are not exempt.** The check used to skip frames carrying a
-`SeqNum`, on the reasoning that a relayed frame was validated at its own
-ingress. Nothing distinguished that from a submitter setting a non-zero
-`SeqNum`, which made the EF posture opt-out with a one-byte edit. A lane that
-legitimately carries relayed frames now declares itself with
-`-allow-stamped-ingress`; every other lane rejects stamped input outright
+**Stamped frames are not exempt.** A relayed frame was validated at its own
+ingress, but nothing distinguishes it from a submission whose sender set a
+non-zero `SeqNum`; an exemption would make the EF posture opt-out with a
+one-byte edit. A lane that legitimately carries relayed frames declares itself
+with `-allow-stamped-ingress`; every other lane rejects stamped input outright
 (`reason=stamped_ingress`). See
 [Stamped ingress](configuration.md#stamped-ingress).
 
 Because a raw transaction and its extended form share the **same TxID** (the ID
-is over the standard serialisation), a raw→EF "re-transmit" service on the fabric
+is over the standard serialization), a raw→EF "re-transmit" service on the fabric
 would collide with ingress TxID dedup; EF must therefore be produced at the
 wallet, at signing time, where the input UTXOs are already in hand.
 
@@ -454,13 +453,13 @@ wallet, at signing time, where the input UTXOs are already in hand.
 
 The hot path below applies to BRC-12/BRC-124/BRC-128 frames received via UDP:
 
-1. `frame.Decode(raw)` — extract the TxID; drop on bad magic or unknown version.
-2. **HashKey/SeqNum stamp (BRC-124/BRC-128 only)** — if `raw[48:56]` (SeqNum) is
+1. `frame.Decode(raw)`: extract the TxID; drop on bad magic or unknown version.
+2. **HashKey/SeqNum stamp (BRC-124/BRC-128 only)**: if `raw[48:56]` (SeqNum) is
    non-zero the sender has pre-stamped the frame; forward verbatim. Otherwise
    stamp `raw[40:48]` (HashKey) as `XXH64(senderIPv6 ∥ groupIdx ∥ subtreeID)` and
    `raw[48:56]` (SeqNum) as a monotonic per-flow counter, in-place. BRC-12 frames
    are always untouched.
-3. `Egress.EnqueueData(raw)` — fan the raw bytes out into the worker's
+3. `Egress.EnqueueData(raw)`: fan the raw bytes out into the worker's
    outbound queue, one entry per egress interface.
 4. After every packet in the current receive batch has been processed,
    `Egress.Flush()` dispatches one `WriteBatch` (sendmmsg) per target.
@@ -472,7 +471,7 @@ completes before the next ReadBatch overwrites the same memory.
 BRC-134 anchor frames received via UDP or TCP follow a parallel path through
 `ProcessAnchor`. BRC-131 and BRC-132 frames follow the same pattern through
 `ProcessBlock` and `ProcessSubtreeData`, but enter only via the privileged
-push lanes — the public ingress rejects them. These functions perform the same
+push lanes; the public ingress rejects them. These functions perform the same
 in-place HashKey/SeqNum stamping (and optional BRC-130 fragmentation for
 BRC-131/BRC-132), but route to fixed control-plane groups rather than
 shard-derived addresses.
@@ -481,12 +480,12 @@ shard-derived addresses.
 
 Shutdown proceeds in two phases when `SIGINT` or `SIGTERM` is received:
 
-1. **Drain** — `rec.SetDraining()` is called immediately, flipping `/readyz`
+1. **Drain**: `rec.SetDraining()` is called immediately, flipping `/readyz`
    to `503` so load balancers stop routing new connections. If `-drain-timeout`
    is non-zero, the process sleeps for that duration while workers continue
    forwarding in-flight packets.
 
-2. **Quiesce** — The `done` channel is closed. Each UDP worker and the TCP
+2. **Quiesce**: the `done` channel is closed. Each UDP worker and the TCP
    listener close their ingress sockets, unblocking any pending `ReadBatch` /
    `Accept` calls. Each UDP worker runs a deferred `Egress.Flush()` so the
    last receive batch's egress is not lost. Active TCP connections are
@@ -498,8 +497,8 @@ Shutdown proceeds in two phases when `SIGINT` or `SIGTERM` is received:
 
 Off by default; enabled with `-manifest-consumer-enabled`. When on, the
 proxy opens a **dedicated beacon-receive socket** on the beacon group
-(`FFxx::B:FFFD`) — unlike the listener, the proxy is not otherwise a
-multicast subscriber — decodes BRC-139 ShardManifest datagrams into the
+(`FFxx::B:FFFD`; unlike the listener, the proxy is not otherwise a
+multicast subscriber), decodes BRC-139 ShardManifest datagrams into the
 shared `shard-common/manifest` `Registry`, and runs the `Evaluator` on a
 1 s tick. Adoption requires `≥ -pilot-quorum` distinct `Authoritative`
 announcers agreeing for the hysteresis window; manual CLI values always
@@ -521,7 +520,7 @@ Two adoption modes, selected by `-live-resharding`:
   (floored by `-bridging-window`).
 
 Flag reference and fail-closed rules: [configuration.md](configuration.md#auto-shard-config-brc-139).
-System-level design: [Automatic Shard Configuration Plan](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#automatic-shard-configuration).
+System-level design: [Automatic Shard Configuration design](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#automatic-shard-configuration).
 
 ## Logging & Tracing
 
@@ -541,14 +540,14 @@ as a `bsp_host_info` gauge.
 **Category-8 OS/NIC logs** (the kernel conditions metrics show only as counts)
 are emitted, throttled, at the syscall sites that observe them:
 
-- `forwarder/egress.go` — `Egress.Flush` classifies `WriteBatch`/`sendmmsg`
+- `forwarder/egress.go`: `Egress.Flush` classifies `WriteBatch`/`sendmmsg`
   errors, logging `ENOBUFS` (kernel send-buffer / qdisc backpressure) with
   errno + dropped count, throttled per interface (log-once-then-count).
-- `worker/worker.go` — warns when the kernel clamps `SO_RCVBUF` below the
+- `worker/worker.go`: warns when the kernel clamps `SO_RCVBUF` below the
   requested size (undersized `net.core.rmem_max`).
 
 **Tracing** is opt-in (`-trace-sampling > 0` with an `-otlp-endpoint`) and
-control-plane only — the forwarder receive/send loops take no span. Export is
+control-plane only; the forwarder receive/send loops take no span. Export is
 out-of-process via the collector. See the
 [Unified Component Logging](https://github.com/lightwebinc/shard-common/blob/main/docs/logging.md).
 

@@ -8,15 +8,15 @@ as fallbacks; hard-coded defaults apply when neither is present.
 | Flag | Env var | Default | Description |
 |------|---------|---------|-------------|
 | `-listen` | `LISTEN_ADDR` | `[::]` | Ingress bind address (without port) |
-| `-udp-listen-port` | `UDP_LISTEN_PORT` | `8725` | UDP transaction ingress — **framed** (BRC-124/128/legacy BRC-12), **bare** header-stripped transactions, or a **BEEF submission record** (leading `0xBEEF` tag), auto-detected from the leading bytes (one submission per datagram). See [Transaction ingress](architecture.md#transaction-ingress-framed-bare-and-ef-native) |
+| `-udp-listen-port` | `UDP_LISTEN_PORT` | `8725` | UDP transaction ingress: **framed** (BRC-124/128/legacy BRC-12), **bare** header-stripped transactions, or a **BEEF submission record** (leading `0xBEEF` tag), auto-detected from the leading bytes (one submission per datagram). See [Transaction ingress](architecture.md#transaction-ingress-framed-bare-and-ef-native) |
 | `-tcp-listen-port` | `TCP_LISTEN_PORT` | `0` | TCP ingress port for reliable delivery (0 = disabled) |
 | `-subtree-listen-port` | `SUBTREE_LISTEN_PORT` | `0` | TCP port accepting BRC-143 subtree push frames (privileged; bind tunnel-side; standard 8726; 0 = disabled) |
 | `-block-listen-port` | `BLOCK_LISTEN_PORT` | `0` | TCP port accepting BRC-144 block push frames (privileged; bind tunnel-side; standard 8727; 0 = disabled) |
-| `-beef-listen-port` | `BEEF_LISTEN_PORT` | `0` | Optional dedicated TCP lane for BRC-148 BEEF submission records (flow separation only — BEEF also rides the tx port; standard 8728; 0 = disabled). See [BRC-148 BEEF object plane](#brc-148-beef-object-plane) |
+| `-beef-listen-port` | `BEEF_LISTEN_PORT` | `0` | Optional dedicated TCP lane for BRC-148 BEEF submission records (flow separation only; BEEF also rides the tx port; standard 8728; 0 = disabled). See [BRC-148 BEEF object plane](#brc-148-beef-object-plane) |
 | `-beef-shard-bits` | `BEEF_SHARD_BITS` | `0` | BRC-148 BEEF plane shard-bit width (band `0x1000 + 2^bits` groups; 0–12, `0` = single group) |
 | `-beef-max-object-bytes` | `BEEF_MAX_OBJECT_BYTES` | `1048576` | Maximum accepted BEEF object size in bytes (BRC-149 ingress bound), on every acceptance path |
-| `-require-block-pow` | `REQUIRE_BLOCK_POW` | `true` | Gate BRC-131 block announces on a cheap stateless proof-of-work check of the in-frame header. Permissionless (validates work, not identity). **Default ON** — set `=false` to admit unvalidated announces. See [Block-announce proof-of-work](#block-announce-proof-of-work) |
-| `-require-ef` | `REQUIRE_EF` | `false` | **EF-native ingress**: reject raw BRC-12/BRC-124 transaction submissions; only Extended Format (BRC-30) is admitted. Applies to stamped frames too — `SeqNum` is sender-chosen and must not waive the EF posture. See [EF-native ingress](architecture.md#ef-native-ingress--require-ef) |
+| `-require-block-pow` | `REQUIRE_BLOCK_POW` | `true` | Gate BRC-131 block announces on a cheap stateless proof-of-work check of the in-frame header. Permissionless (validates work, not identity). **Default ON**; set `=false` to admit unvalidated announces. See [Block-announce proof-of-work](#block-announce-proof-of-work) |
+| `-require-ef` | `REQUIRE_EF` | `false` | **EF-native ingress**: reject raw BRC-12/BRC-124 transaction submissions; only Extended Format (BRC-30) is admitted. Applies to stamped frames too: `SeqNum` is sender-chosen and must not waive the EF posture. See [EF-native ingress](architecture.md#ef-native-ingress--require-ef) |
 | `-allow-stamped-ingress` | `ALLOW_STAMPED_INGRESS` | `false` | Admit framed BRC-124/BRC-128 input that already carries a SeqNum (another proxy's output). **Off by default**: an ingress proxy accepts submissions, not relay. Enable on a spine collect lane or relay hop. See [Stamped ingress](#stamped-ingress) |
 | `-verify-payload-hash` | `VERIFY_PAYLOAD_HASH` | `false` | Verify the canonical TxID of **framed** BRC-124/BRC-128 input against its payload and drop mismatches before the ingress dedup claim. Bare submissions are unaffected (the proxy derives their TxID itself). Costs one SHA256d per framed transaction. See [Payload-hash verification](#payload-hash-verification) |
 | `-verify-subtree-root` | `VERIFY_SUBTREE_ROOT` | `true` | Recompute a BRC-132 subtree's merkle root from its node hashes and drop the frame if it does not match its SubtreeID, before the ingress dedup claim. **Default ON**. Stamped frames are not exempt. See [Subtree root verification](#subtree-root-verification) |
@@ -28,8 +28,8 @@ as fallbacks; hard-coded defaults apply when neither is present.
 | `-shard-bits` | `SHARD_BITS` | `2` | Key bit width (1–12 per BRC-129) |
 | `-scope` | `MC_SCOPE` | `site` | Multicast scope: `link` \| `site` \| `org` \| `global` |
 | `-mc-group-id` | `MC_GROUP_ID` | `0x000B` | IANA group-id (bytes 12–13); default = IANA Bitcoin allocation `FF0X::B` |
-| `-source-mode` | `SOURCE_MODE` | `asm` | Multicast addressing model: `asm` (FF0x; default) or `ssm` (FF3x per RFC 4607). SSM derives the prefix via `shard.Prefix(SSM, scope)` → FF35 site / FF3E global; RFC 8815 deprecates ASM at global scope and is rejected. Requires PIM-SSM in the fabric. See [SSM Support Plan](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#source-specific-multicast-ssm). |
-| `-bind-source` | `BIND_SOURCE` | `""` | IPv6 literal bound on every multicast egress socket via `syscall.Bind` in `openEgressSocket`. **Required when `-source-mode=ssm`** and MUST be distinct per replica — anycast/ECMP-shared sources break PIM-SSM RPF. For single-identity deployments use VRRP active-standby. |
+| `-source-mode` | `SOURCE_MODE` | `asm` | Multicast addressing model: `asm` (FF0x; default) or `ssm` (FF3x per RFC 4607). SSM derives the prefix via `shard.Prefix(SSM, scope)` → FF35 site / FF3E global; RFC 8815 deprecates ASM at global scope and is rejected. Requires PIM-SSM in the fabric. See [Source-Specific Multicast design](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#source-specific-multicast-ssm). |
+| `-bind-source` | `BIND_SOURCE` | `""` | IPv6 literal bound on every multicast egress socket via `syscall.Bind` in `openEgressSocket`. **Required when `-source-mode=ssm`** and MUST be distinct per replica; anycast/ECMP-shared sources break PIM-SSM RPF. For single-identity deployments use VRRP active-standby. |
 | `-stamp-source` | `STAMP_SOURCE` | `true` | Authoritatively stamp the BRC HashKey from the **observed** packet source IP, overriding any sender-supplied value, so the per-flow identity is the real ingress source. This is what makes own-traffic exclusion per-consumer at a direct/collapsed edge (the proxy sees each consumer's distinct source). Set `false` **only** behind a source-rewriting load balancer, where every consumer would otherwise appear as the LB address and the upstream-supplied HashKey is trusted instead. |
 | `-workers` | `NUM_WORKERS` | `runtime.NumCPU()` | Worker goroutine count (0 = NumCPU) |
 | `-debug` | `DEBUG` | `false` | Enable per-packet debug logging and multicast loopback (single-host testing); deprecated alias for `-log-level=debug` |
@@ -41,15 +41,15 @@ as fallbacks; hard-coded defaults apply when neither is present.
 | `-log-format` | `LOG_FORMAT` | `text` | Log output format: `text` (stderr, dev default) or `json` (stdout, for fleet aggregation). See [Unified Logging](https://github.com/lightwebinc/shard-common/blob/main/docs/logging.md) |
 | `-log-level` | `LOG_LEVEL` | `info` | Log level: `debug` \| `info` \| `warn` \| `error`. Runtime-togglable via `POST /loglevel?level=` and SIGHUP. `-debug` is a deprecated alias for `debug` |
 | `-trace-sampling` | `TRACE_SAMPLING` | `0` | Distributed-trace head sampling ratio `0`–`1` (`0` = tracing off, no-op tracer; exports via `-otlp-endpoint`; control-plane only, never the packet hot path) |
-| `-frag-mtu` | `FRAG_MTU` | `1500` | Path MTU for BRC-130 fragmentation; default 1500 (Ethernet baseline). Set to the **smallest** MTU on the egress path — on a tunnelled fabric that is the tunnel inner MTU, not the local NIC. `0` = disabled, which strands every payload above MTU−140 (1360 at 1500) as an undeliverable oversize datagram |
+| `-frag-mtu` | `FRAG_MTU` | `1500` | Path MTU for BRC-130 fragmentation; default 1500 (Ethernet baseline). Set to the **smallest** MTU on the egress path; on a tunneled fabric that is the tunnel inner MTU, not the local NIC. `0` = disabled, which strands every payload above MTU−140 (1360 at 1500) as an undeliverable oversize datagram |
 | `-coalesce` | `COALESCE` | `false` | Opt-in BRC-142 origin-side frame coalescing (pack many small same-`(group, subtree)` tx per datagram to cut egress pps). See [BRC-142 Coalescing](#brc-142-coalescing-origin-side) |
 | `-coalesce-max-bytes` | `COALESCE_MAX_BYTES` | `1500` | Path MTU budget for a coalesced bundle, **on the wire** (1500 = Ethernet MTU baseline; 9000 for jumbo on a controlled underlay; `0` also means 1500). Set it to the smallest MTU on the egress path. The 48-byte IPv6+UDP header is subtracted before packing, exactly like `-frag-mtu` |
 | `-coalesce-max-members` | `COALESCE_MAX_MEMBERS` | `0` | Max member transactions per bundle (`0` = MTU-bound only, capped by the wire `TxCount` uint16) |
 | `-coalesce-carry-txid` | `COALESCE_CARRY_TXID` | `false` | Carry each member's 32-byte TxID on the wire (for downstream dedup / operator accounting; all-or-none across the bundle) instead of recomputing it on receipt (saves 32 B/member) |
 | `-recv-batch` | `BSP_RECV_BATCH` | `32` | Datagrams per `recvmmsg` syscall (1 = per-packet legacy path) |
-| `-retry-tee` | `BSP_RETRY_TEE` | `""` | Mirror each egressed DATA datagram to a co-located retry endpoint's cache-ingest address (e.g. `[::1]:9001`) — needed on a node that originates frames and hosts its own retry cache, since it must never (S,G)-join its own source. Copies are batched into one `sendmmsg` per egress batch. Empty = disabled |
+| `-retry-tee` | `BSP_RETRY_TEE` | `""` | Mirror each egressed DATA datagram to a co-located retry endpoint's cache-ingest address (e.g. `[::1]:9001`); needed on a node that originates frames and hosts its own retry cache, since it must never (S,G)-join its own source. Copies are batched into one `sendmmsg` per egress batch. Empty = disabled |
 | `-recv-buf-bytes` | `BSP_RECV_BUF_BYTES` | `0` | Per-worker `SO_RCVBUF` in bytes (`0` = the worker default of 4 MiB; the kernel caps the request at `net.core.rmem_max`) |
-| `-ingress-dedup` | `INGRESS_DEDUP` | `true` | Enable ingress TxID dedup. `false` bypasses the dedup gate entirely — only sound for single-proxy ingest topologies. See [Ingress TxID Deduplication](#ingress-txid-dedup) |
+| `-ingress-dedup` | `INGRESS_DEDUP` | `true` | Enable ingress TxID dedup. `false` bypasses the dedup gate entirely; only sound for single-proxy ingest topologies. See [Ingress TxID Deduplication](#ingress-txid-dedup) |
 | `-pprof` | `BSP_PPROF` | `false` | Mount `net/http/pprof` at `/debug/pprof/*` on the metrics server (profiling only) |
 
 ---
@@ -65,10 +65,10 @@ UDP ingress uses `SO_REUSEPORT` to distribute incoming datagrams across all
 worker goroutines with no userspace coordination. Each worker pulls up to
 `-recv-batch` datagrams per `recvmmsg(2)` syscall and flushes the
 corresponding egress queue once per batch via `sendmmsg(2)` (one syscall per
-target interface), amortising syscall cost across the batch. On platforms
+target interface), amortizing syscall cost across the batch. On platforms
 without `recvmmsg`/`sendmmsg` (macOS, FreeBSD) the `golang.org/x/net/ipv6`
 library transparently falls back to per-packet send/recv; the proxy is
-functionally identical but does not gain the syscall-amortisation speed-up.
+functionally identical but does not gain the syscall-amortization speed-up.
 This is the high-throughput path.
 
 ```
@@ -81,7 +81,7 @@ TCP ingress provides reliable, ordered delivery for senders that require it
 (e.g. over lossy links). Grammar is detected **once per connection** from the
 leading bytes: a `0xBEEF` record tag selects a BEEF submission-record stream;
 the BSV network magic selects a framed stream (BRC-12, BRC-124, or BRC-128
-frames concatenated end-to-end — a 44-byte header read, extended to 92 bytes
+frames concatenated end-to-end: a 44-byte header read, extended to 92 bytes
 for 92-byte-header versions, then `PayLen` payload bytes); anything else is a
 bare transaction stream.
 
@@ -106,8 +106,8 @@ shard-proxy \
 
 Ingress accepts the **open class set only**: BRC-12 / 124 / 128 transactions,
 framed or bare (an anchor is an ordinary transaction), and BRC-148 BEEF objects
-(submission records or FrameVer `0x09`). Privileged control-plane frames — block
-announce (BRC-131), coinbase (BRC-133, deprecated), subtree data (BRC-132) —
+(submission records or FrameVer `0x09`). Privileged control-plane frames, meaning block
+announce (BRC-131), coinbase (BRC-133, deprecated) and subtree data (BRC-132),
 arriving on an ingress socket are **dropped** and counted
 (`bsp_privileged_frame_rejected_total`).
 
@@ -117,11 +117,9 @@ arriving on an ingress socket are **dropped** and counted
 | BEEF lane (optional) | `-beef-listen-port` (8728) | BRC-148 BEEF **submission records only** (an `objfmt.ClassBEEF` record stream, so no framed input; a non-record stream desyncs the reader and closes the connection). |
 | Push lanes (privileged) | `-subtree-listen-port` (8726), `-block-listen-port` (8727) | BRC-143 subtree / BRC-144 block push objects, reframed to BRC-132 / BRC-131. |
 
-> **Deprecated 2026-07-07 — the miner multicast port is gone.** The former
-> `-miner-listen-port` / `-miner-tcp-listen-port` / `-tx-accept-privileged`
-> flags have been removed. Blocks and subtrees are no longer submitted as
-> multicast frames: a miner is a tunnel consumer that submits **BRC-144 block**
-> and **BRC-143 subtree** push frames on the proxy's tunnel-bound push
+> **There is no miner multicast port.** Blocks and subtrees are not submitted
+> as multicast frames: a miner is a tunnel consumer that submits **BRC-144
+> block** and **BRC-143 subtree** push frames on the proxy's tunnel-bound push
 > ports (8726 / 8727), which the proxy reframes into the fabric internally.
 > Multicast (BRC-131/132/133/134) is fabric-internal transport only. See
 > [DESIGN.md § Ingress authorization (miner-tier gate)](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#ingress-authorization-miner-tier-gate).
@@ -139,7 +137,7 @@ announce is forwarded only if its in-frame 80-byte header hashes under the
 target its own `nBits` claims, and that target is at least as hard as
 `-min-pow-bits` (the difficulty floor). Anyone may announce a block; forging a
 passing header costs work proportional to the floor, while the proxy verifies
-it with a single double-SHA256 — that asymmetry is the spam gate, with no
+it with a single double-SHA256; that asymmetry is the spam gate, with no
 allowlist and nothing to coordinate across domains.
 
 ```
@@ -157,7 +155,7 @@ Scope and limits:
 - Set a real `-min-pow-bits` floor in production: `0` only checks the header is
   self-consistent, which a forger satisfies trivially by claiming easy
   difficulty.
-- This is **not** full consensus validation (no chain context — it cannot
+- This is **not** full consensus validation (no chain context, so it cannot
   verify `nBits` is the correct retarget for the height). It rejects spam at
   ingress; the consuming node (Teranode) does full validation.
 
@@ -194,20 +192,17 @@ stamped input by definition, so a gap-injection run against a proxy requires
 `-allow-stamped-ingress=true`. Its direct-multicast mode bypasses the proxy and
 is unaffected either way.
 
-### Why `-require-ef` no longer exempts stamped frames
+### `-require-ef` and stamped frames
 
-`-require-ef` used to skip its check when `SeqNum != 0`, reasoning that a
-relayed frame had been validated at its own ingress. That reasoning holds for
-genuine relay traffic, but nothing distinguished it from a submitter who simply
-set a non-zero `SeqNum` — making the EF posture opt-out with a one-byte edit.
+`-require-ef` checks every framed transaction, stamped or not. A relayed frame
+was validated at its own ingress, but nothing distinguishes it from a
+submission whose sender set a non-zero `SeqNum`; exempting stamped frames
+would make the EF posture opt-out with a one-byte edit.
 
-The exemption is gone. A lane that legitimately carries relayed frames declares
-itself with `-allow-stamped-ingress`, and on an EF-native fabric its traffic is
-Extended Format anyway, so the check costs it nothing.
-
-> **Behaviour change.** A deployment relying on the old exemption to relay
-> non-EF payloads with `-require-ef` on will now see them dropped as
-> `ingress_not_ef`. On an EF-native fabric there is no such traffic.
+A lane that legitimately carries relayed frames declares itself with
+`-allow-stamped-ingress`, and on an EF-native fabric its traffic is Extended
+Format anyway, so the check costs it nothing. A relay of non-EF payloads with
+`-require-ef` on sees them dropped as `ingress_not_ef`.
 
 Scope: the gate covers FrameVer `0x02` (BRC-124/BRC-128). BRC-12 (V1) decodes
 with a zero `SeqNum` and is unaffected; BRC-130 fragments (`0x03`) and the
@@ -222,7 +217,7 @@ other V2 gate.
 datagram to carry the canonical transaction id of its own payload: SHA256d over
 the standard serialization, EF extras excluded (`objfmt.TxID`). That is the id
 producers stamp and consumers derive, so honest Extended Format traffic
-verifies cleanly — a gate that hashed the raw EF bytes instead would drop 100%
+verifies cleanly; a gate that hashed the raw EF bytes instead would drop 100%
 of it.
 
 Off by default. Two checks run, both ahead of the dedup claim and group
@@ -246,7 +241,7 @@ listener sees the frame:
 - **The ingress dedup claim** is keyed on the TxID, and `-ingress-dedup`
   defaults to `true`. A frame carrying an honest transaction's TxID over a
   forged payload wins the claim, and the honest transaction is then suppressed
-  at ingress — it never reaches a listener, so the listener's own verification
+  at ingress; it never reaches a listener, so the listener's own verification
   cannot undo it.
 
 The gate therefore runs **before** `claimIngress`, not after.
@@ -255,11 +250,11 @@ The gate therefore runs **before** `claimIngress`, not after.
 
 - **Bare submissions are exempt and cost nothing.** The proxy derives their
   TxID itself when reframing, so there is nothing to verify.
-- **BRC-12 (V1) frames are forwarded verbatim** regardless — the legacy wire
+- **BRC-12 (V1) frames are forwarded verbatim** regardless; the legacy wire
   format carries no payload-bound identifier.
 - **Already-stamped frames are *not* exempt.** `SeqNum` is chosen by whoever
-  sent the frame, so exempting on it would be a one-byte bypass of the gate —
-  the same reasoning that removed the former `-require-ef` exemption (see
+  sent the frame, so exempting on it would be a one-byte bypass of the gate,
+  the same reasoning that keeps `-require-ef` applied to stamped frames (see
   [Stamped ingress](#stamped-ingress)). A stamped frame admitted via
   `-allow-stamped-ingress` is still verified here.
 - BRC-142 bundles (`0x08`), BEEF (`0x09`), and the block/subtree/anchor classes
@@ -269,14 +264,14 @@ The gate therefore runs **before** `claimIngress`, not after.
 
 One SHA256d over the payload per framed transaction, plus one structural walk.
 `objfmt.TxID` streams the standard serialization into the hash rather than
-materialising it, so the check allocates nothing — but the hash itself is not
+materializing it, so the check allocates nothing, but the hash itself is not
 free, and on a CPU **without SHA-NI** it can exceed the cost of the entire
 forward path. Measured on a Xeon E5-2699 v3 (Haswell, no SHA-NI), a 232-byte
 1-in/1-out EF transaction: ~1.84 µs to verify against ~1.0 µs to forward.
 
 Any CPU with SHA-NI (Zen 1+, Ice Lake+, Graviton2+) hashes far faster, and Go's
 `crypto/sha256` uses it automatically. **Measure on the target edge CPU before
-enabling on a hot lane** — the ratio above is close to the worst case, not the
+enabling on a hot lane**; the ratio above is close to the worst case, not the
 typical one.
 
 Enable it on permissionless / miner-lane ingress and on any edge where
@@ -386,7 +381,7 @@ control. See [bsv-multicast/docs/brc-134-anchor-transactions.md](https://github.
 
 Coalescing is the inverse of BRC-130 fragmentation: instead of splitting one
 large frame across many datagrams, it packs **many small transactions into one
-datagram** — a BRC-142 *bundle* frame (`FrameVer 0x08`, 66-byte header). It is
+datagram**: a BRC-142 *bundle* frame (`FrameVer 0x08`, 66-byte header). It is
 opt-in (`-coalesce`, off by default) and trades a small latency/CPU cost for a
 large reduction in egress packets-per-second when the workload is many tiny
 transactions.
@@ -399,11 +394,11 @@ subtracts the 48-byte IPv6+UDP header, so the bundle body is capped at
 `-coalesce-max-bytes − 48` (1452 at the 1500 default) and the datagram that
 leaves the NIC is never larger than the configured MTU. Each bundle draws its `HashKey`/`SeqNum` from the **same
 per-flow counter** that stamps individual frames, so a flow's bundles and any
-individual frames it also emits share one contiguous sequence space — a listener
+individual frames it also emits share one contiguous sequence space; a listener
 gap-tracks the `(group, subtree, HashKey)` flow uniformly regardless of frame
 version, and NACK/retry treats a bundle as a single "fat frame."
 
-**Origin-only rule.** Coalescing runs **only at the emitting (origin) proxy** —
+**Origin-only rule.** Coalescing runs **only at the emitting (origin) proxy**:
 the collapsed or ingress edge that first sees the individual transactions. A
 regional spine that *relays* an already-coalesced bundle forwards it
 **verbatim**: it is not re-coalesced, not re-stamped, and not split. A bundle is
@@ -426,7 +421,7 @@ shard-proxy \
 
 Wire format (bundle header + member section), the `Coalescer`/`Decoalesce`/
 `Rebucketer` transforms, and the all-or-none TxID flag are specified once in the
-canonical BRC-142 spec — see
+canonical BRC-142 spec; see
 [`shard-common/docs/protocol.md` § BRC-142](https://github.com/lightwebinc/shard-common/blob/main/docs/protocol.md#3a-brc-142-coalescing-bundle-frame-format)
 and the public
 [bsv-multicast/docs/brc-142-coalescing-frame.md](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-142-coalescing-frame.md).
@@ -437,7 +432,7 @@ in this proxy.
 Bundle metrics: `bsp_coalesce_bundles_total` (bundle datagrams flushed) and
 `bsp_coalesce_members_total` (member transactions packed) count origin packing,
 with the per-bundle member count distributed in `bsp_coalesce_members_per_bundle`.
-`bsp_coalesce_flush_total{reason}` records flushes by reason — `batch` for
+`bsp_coalesce_flush_total{reason}` records flushes by reason: `batch` for
 origin-packed bundles, `relay` for verbatim spine re-emits, `encode_error` on a
 skipped bundle.
 
@@ -449,7 +444,7 @@ skipped bundle.
 |----------|--------|-----------------------------------------------------|
 | `link` | `FF02` | Same L2 segment only |
 | `site` | `FF05` | Site-local (default; crosses routers within a site) |
-| `org` | `FF08` | Organisation-wide |
+| `org` | `FF08` | Organization-wide |
 | `global` | `FF0E` | Internet-routable |
 
 ---
@@ -458,9 +453,11 @@ skipped bundle.
 
 The metrics HTTP server (default `:9100`) exposes:
 
-- **`/metrics`** — Prometheus text format
-- **`/healthz`** — Always `200 OK` if the process is running
-- **`/readyz`** — `200` when all workers are ready; `503` while starting or draining
+- **`/metrics`**: Prometheus text format
+- **`/healthz`**: always `200 OK` if the process is running
+- **`/readyz`**: `200` when all workers are ready; `503` while starting or draining
+- **`/loglevel`**: `POST /loglevel?level=<lvl>` changes the log level at runtime
+- **`/debug/pprof/*`**: `net/http/pprof`, mounted only with `-pprof`
 
 Every exported series is listed in the [Metrics Reference](metrics.md).
 
@@ -470,15 +467,15 @@ Every exported series is listed in the [Metrics Reference](metrics.md).
 
 When a shutdown signal is received the proxy performs a two-phase shutdown:
 
-1. **Drain phase** — `/readyz` immediately returns `503` (status `"draining"`), signalling the load balancer to stop routing new connections. The process sleeps for `-drain-timeout`. Workers continue forwarding in-flight packets during this window.
-2. **Quiesce phase** — The ingress socket is closed, each worker exits its receive loop, and the process waits for all goroutines to finish before exiting.
+1. **Drain phase**: `/readyz` immediately returns `503` (status `"draining"`), signaling the load balancer to stop routing new connections. The process sleeps for `-drain-timeout`. Workers continue forwarding in-flight packets during this window.
+2. **Quiesce phase**: the ingress socket is closed, each worker exits its receive loop, and the process waits for all goroutines to finish before exiting.
 
-Setting `-drain-timeout 0s` (the default) skips the sleep and closes sockets immediately after marking draining — suitable for single-node or development deployments.
+Setting `-drain-timeout 0s` (the default) skips the sleep and closes sockets immediately after marking draining, suitable for single-node or development deployments.
 
 For production with a load balancer or BGP, set `-drain-timeout` to at least the LB health-check interval plus one check period:
 
 ```bash
-# LB health-check every 5 s — allow two missed checks before closing
+# LB health-check every 5 s; allow two missed checks before closing
 shard-proxy -iface eth0 -drain-timeout 15s
 ```
 
@@ -525,7 +522,7 @@ shard-proxy \
 
 ### Source-Specific Multicast (RFC 4607)
 
-See the [SSM Support Plan](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#source-specific-multicast-ssm).
+See the [Source-Specific Multicast design](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#source-specific-multicast-ssm).
 
 ```bash
 shard-proxy \
@@ -552,7 +549,7 @@ shard-proxy -iface eth0 -coalesce -coalesce-max-bytes 1500
 ### BRC-139 auto-shard-config
 
 See [Auto-Shard-Config](#auto-shard-config-brc-139) and the
-[Automatic Shard Configuration Plan](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#automatic-shard-configuration).
+[Automatic Shard Configuration design](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#automatic-shard-configuration).
 
 ```bash
 shard-proxy \
@@ -627,7 +624,7 @@ FF05::CAFE:<shard_index>          # With overridden group-id 0xCAFE
 ```
 
 `SHARD_BITS` is a fixed, deployment-wide setting shared by all subscribers.
-Doubling `SHARD_BITS` splits every existing group into two children —
+Doubling `SHARD_BITS` splits every existing group into two children;
 subscribers join additional groups without invalidating existing ones,
 so scale-up requires no redesign.
 
@@ -639,24 +636,23 @@ and multicasting. A two-tier claim store is consulted on every BRC-124/128
 BRC-149 BEEF (V9, keyed on `SHA-256(ContentID ∥ TopicID)`) frame. Legacy
 BRC-12 (V1) frames and BRC-142 bundle relays bypass the gate.
 
-- **Tier 1** — in-process LRU keyed by TxID, sharded across 64 stripes
-  (each with its own mutex) to keep the dedup path from serialising all
+- **Tier 1**: in-process LRU keyed by TxID, sharded across 64 stripes
+  (each with its own mutex) to keep the dedup path from serializing all
   workers. Memory bounded by `-txid-dedup-local-cap` (default 1 048 576
   entries, ~50 MiB). A hit short-circuits and the frame is dropped without
   contacting Redis.
-- **Tier 2** — a modular `shard-common/cache` backend `SetNX`
+- **Tier 2**: a modular `shard-common/cache` backend `SetNX`
   (`redis|aerospike|memory`). Selected by `-txid-dedup-backend` (or inferred:
   `redis` when `-txid-dedup-redis-addr` is set, else `none`). On a tier-1 miss
   the proxy claims `<prefix><hex-txid>`; on win it forwards, on loss it drops.
   Errors fail open (frame is forwarded; a metric is recorded). See
   [`shard-common/docs/cache-backend.md`](https://github.com/lightwebinc/shard-common/blob/main/docs/cache-backend.md).
 
-The whole gate runs per packet, so it costs CPU. After the localSet
-sharding + direct-Prometheus counter work the dedup-on overhead is small
-(measured ~6 % fewer pps at 256 B vs dedup-off on a 25 GbE single-host
-loopback), but `-ingress-dedup=false` bypasses it entirely for
-deployments that provably never ingest duplicates (a single proxy with a
-single upstream feed). Leave it on for any multi-proxy or bridged topology.
+The whole gate runs per packet, so it costs CPU: with dedup on, about 6 %
+fewer pps at 256 B than with it off (25 GbE single-host loopback).
+`-ingress-dedup=false` bypasses it entirely for deployments that provably
+never ingest duplicates (a single proxy with a single upstream feed). Leave
+it on for any multi-proxy or bridged topology.
 
 ### Flags
 
@@ -674,32 +670,32 @@ single upstream feed). Leave it on for any multi-proxy or bridged topology.
 
 ### Topology guidance
 
-- **Single proxy, no Redis** — leave `-txid-dedup-redis-addr` empty. The
+- **Single proxy, no Redis**: leave `-txid-dedup-redis-addr` empty. The
   tier-1 LRU still suppresses local repeats (e.g. multiple upstream peers
   forwarding the same TxID).
-- **Multiple proxies at one site** — point all proxies at the same Redis.
+- **Multiple proxies at one site**: point all proxies at the same Redis.
   Whichever proxy wins the SETNX multicasts; siblings drop.
-- **Listener marks the ingress set** — when the local listener has
+- **Listener marks the ingress set**: when the local listener has
   `-mark-ingress-set` enabled, its courtesy SETNX populates the same
   namespace, so a TxID delivered via cross-site bridge prevents the local
   proxy from re-multicasting it.
 
 ### Metrics
 
-- `bsp_ingress_deduped_total{frame_type, worker, network.interface.name}` —
+- `bsp_ingress_deduped_total{worker, network_interface_name, frame_type}`:
   frames suppressed by the gate.
-- `bsp_txid_claim_local_hit_total{prefix}` — tier-1 short-circuits.
-- `bsp_txid_claim_won_total{prefix}` / `bsp_txid_claim_lost_total{prefix}` —
+- `bsp_txid_claim_local_hit_total{prefix}`: tier-1 short-circuits.
+- `bsp_txid_claim_won_total{prefix}` / `bsp_txid_claim_lost_total{prefix}`:
   tier-2 SETNX outcomes.
-- `bsp_txid_claim_errors_total{prefix}` — Redis errors (fail-open).
+- `bsp_txid_claim_errors_total{prefix}`: backend errors (fail-open).
 
 ## Auto-Shard-Config (BRC-139)
 
 Optional consumer of BRC-139 ShardManifest announcements. Default off
 (legacy behavior unchanged); opt-in via `-manifest-consumer-enabled`.
 Unlike the listener, the proxy does not currently join the beacon
-group — enabling auto-config adds a dedicated beacon-receive socket.
-See the [Automatic Shard Configuration Plan](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#automatic-shard-configuration)
+group; enabling auto-config adds a dedicated beacon-receive socket.
+See the [Automatic Shard Configuration design](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#automatic-shard-configuration)
 for the system-level design.
 
 ### `-manifest-consumer-enabled` / `MANIFEST_CONSUMER_ENABLED` (default: `false`)
@@ -740,16 +736,15 @@ Which prefix the control-plane group address (BRC-129 index `0xFFFD`) is
 derived from, during the transition to the conformant one.
 
 BRC-126 and BRC-129 both require the control-plane groups to take the
-source-specific `FF3x` prefix when the fabric runs SSM. Releases before this
-one always derived the any-source `FF0x` prefix for the manifest beacon
-whatever `-source-mode` said, even though the data plane in the same process
-derived `FF3x` correctly. Correcting it moves a live group address, and a
-beacon that lands on the wrong group raises no error anywhere: the symptom is
-silence.
+source-specific `FF3x` prefix when the fabric runs SSM. A legacy peer derives
+the any-source `FF0x` prefix for the manifest beacon whatever `-source-mode`
+says, even though its data plane derives `FF3x` correctly. Moving to the
+conformant address moves a live group address, and a beacon that lands on the
+wrong group raises no error anywhere: the symptom is silence.
 
-| Value | Behaviour |
+| Value | Behavior |
 |-------|-----------|
-| `asm-only` | Always the any-source prefix, ignoring `-source-mode`. The pre-fix wire, kept byte for byte. |
+| `asm-only` | Always the any-source prefix, ignoring `-source-mode`. The legacy wire, kept byte for byte. |
 | `both` | Join the legacy and the derived address. **Default**, because this proxy is a receiver on that group. |
 | `derived` | The conformant address per BRC-126 and BRC-129. The end state. |
 
@@ -763,7 +758,7 @@ alike. Roll receivers (this proxy, and the listener) first, then the senders
 senders to `derived`, then the receivers. Setting a sender to `derived` before
 every receiver is upgraded is the one ordering that silently strands a peer.
 
-The flag is temporary and goes away once the fleet is conformant.
+The flag is transitional; a conformant fleet runs `derived` everywhere.
 
 ### `-live-resharding` / `LIVE_RESHARDING` (default: `false`)
 
@@ -778,25 +773,25 @@ listener-side egress dedup absorbs the duplicate frames.
 
 ### `-bridging-window` / `BRIDGING_WINDOW` (default: `0`)
 
-Local floor on the bridging duration. `0` ⇒ honour the pilot's
+Local floor on the bridging duration. `0` ⇒ honor the pilot's
 `TransitionEpoch` verbatim.
 
 ## Helm chart
 
-Flags are exposed under `.config` in the corresponding Helm chart's `values.yaml` — see the chart README for the covered set. See the chart repository for installation snippets and the `values.schema.json` for validation rules.
+Flags are exposed under `.config` in the corresponding Helm chart's `values.yaml`; see the chart README for the covered set. See the chart repository for installation snippets and the `values.schema.json` for validation rules.
 
 Chart: [`charts/shard-proxy`](https://github.com/lightwebinc/charts/tree/main/charts/shard-proxy)
 
 ## BRC-148 BEEF object plane
 
-BEEF is an **open ingress class**: submission records (leading `0xBEEF` tag —
+BEEF is an **open ingress class**: submission records (leading `0xBEEF` tag,
 the third grammar on the tx port beside framed magic and bare tx) and framed
 `FrameVer 0x09` input are accepted on the public port regardless of these
 knobs. Canonical spec: `bsv-multicast/docs/brc-148-shard-domain-beef-plane.md`.
 
 | Flag / Env | Default | Description |
 |------------|---------|-------------|
-| `-beef-listen-port` / `BEEF_LISTEN_PORT` | `0` (off) | Optional dedicated single-class TCP lane (standard **8728**) for 5-tuple flow separation / load balancing — never admission. Included in the TCP-port collision check |
+| `-beef-listen-port` / `BEEF_LISTEN_PORT` | `0` (off) | Optional dedicated single-class TCP lane (standard **8728**) for 5-tuple flow separation / load balancing, never admission. Included in the TCP-port collision check |
 | `-beef-shard-bits` / `BEEF_SHARD_BITS` | `0` | BEEF plane width (band `0x1000 + 2^bits` groups); valid 0–12 (`0` = single group); must match listeners/retry |
 | `-beef-max-object-bytes` / `BEEF_MAX_OBJECT_BYTES` | `1048576` | Maximum accepted object size (BRC-149's ingress MUST-bound); larger submissions are rejected and counted (`bsp_beef_submissions_total{result="oversize"}`) |
 
@@ -805,7 +800,7 @@ the payload being the record verbatim so every name reaches the subscriber
 (`SubmitBEEF` → `ProcessBEEF`): TopicID = the record's first topic, header
 byte 7 `DeliverCount` = how many leading topics delivery edges may match,
 HashKey = XXH64(sender ∥ banded groupIdx ∥
-**zeros** — TopicID is excluded from the flow key per the spec), ingress
+**zeros**; TopicID is excluded from the flow key per the spec), ingress
 dedup claims the **(ContentID, TopicID) pair** as `SHA-256(ContentID ∥ TopicID)`,
 and objects exceeding `-frag-mtu` fragment via BRC-130 with `OrigFrameVer 0x09`.
 
@@ -824,7 +819,7 @@ and objects exceeding `-frag-mtu` fragment via BRC-130 with `OrigFrameVer 0x09`.
   not its first topic (`beef_topic_mismatch`).
 - **Submission results** (`bsp_beef_submissions_total{result}`): `ok`,
   `disabled`, `malformed`, `oversize`, `bad_marker`. Topic roles on admitted
-  records: `bsp_beef_topics_total{role="deliverable"|"label"}`.
+  records: `bsp_beef_topics_total{topic_role="deliverable"|"label"}`.
 - **Oversize records over TCP.** Both TCP paths (the shared port and
   `-beef-listen-port`) read a record under the submitter's object bound plus
   the largest record envelope (983 bytes). A record that fits that allowance is
@@ -835,7 +830,7 @@ and objects exceeding `-frag-mtu` fragment via BRC-130 with `OrigFrameVer 0x09`.
 - **Pre-framed `0x09` input** must meet the same conformance as a record, on
   every acceptance path and before the dedup claim: object bound
   (`beef_oversize`), non-zero TopicID (`beef_no_topic`), BEEF marker
-  (`beef_bad_marker`), and — for submitted, not relayed, frames — a ContentID
+  (`beef_bad_marker`), and (for submitted, not relayed, frames) a ContentID
   that matches `SHA-256d(payload)` (`beef_bad_contentid`), so a submitter
   cannot pre-claim an object it does not have. All count in
   `bsp_packets_dropped_total{reason}`.
