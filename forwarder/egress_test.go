@@ -2,7 +2,10 @@ package forwarder
 
 import (
 	"net"
+	"sync"
 	"testing"
+
+	"golang.org/x/net/ipv6"
 
 	"github.com/lightwebinc/shard-common/shard"
 )
@@ -185,4 +188,66 @@ func TestFlush_MultipleCycles_QueueGrowthBounded(t *testing.T) {
 		// the worst-case for batchHint=4 + one element.
 		t.Errorf("msgs[0] cap grew to %d after 100 Flush cycles; suspected leak", c)
 	}
+}
+
+// A sender goroutine writes every flushed datagram, in order, releases the
+// pooled buffers, and StopSender leaves nothing unsent.
+func TestEgressSenderKeepsOrder(t *testing.T) {
+	w := &recordingWriter{}
+	e := &Egress{
+		targets:   []Target{{Iface: &net.Interface{Name: "lo"}}},
+		pcs:       []batchWriter{w},
+		msgs:      make([][]ipv6.Message, 1),
+		addrCache: [][]*net.UDPAddr{make([]*net.UDPAddr, addrCacheInit)},
+		reliable:  true,
+		pool:      &sync.Pool{New: func() any { b := make([]byte, 16); return &b }},
+	}
+	e.StartSender(2)
+	dst := net.UDPAddr{IP: net.ParseIP("ff02::1"), Port: 9}
+	const batches, each = 50, 7
+	for b := range batches {
+		for n := range each {
+			p := e.PoolGet()
+			(*p)[0], (*p)[1] = byte(b), byte(n)
+			e.EnqueueDataPooled((*p)[:2], dst, 0, 0, p)
+		}
+		e.Flush()
+	}
+	e.StopSender()
+	got := w.taken()
+	if len(got) != batches*each {
+		t.Fatalf("%d datagrams written, want %d", len(got), batches*each)
+	}
+	for i, d := range got {
+		if int(d[0]) != i/each || int(d[1]) != i%each {
+			t.Fatalf("datagram %d is %v", i, d)
+		}
+	}
+	// Flush after StopSender writes inline again.
+	e.EnqueueData([]byte{1, 2}, dst, 0, 0)
+	e.Flush()
+	if n := len(w.taken()); n != batches*each+1 {
+		t.Fatalf("%d datagrams after the inline flush", n)
+	}
+}
+
+// recordingWriter is a batchWriter that keeps a copy of what it was handed.
+type recordingWriter struct {
+	mu  sync.Mutex
+	out [][]byte
+}
+
+func (w *recordingWriter) WriteBatch(ms []ipv6.Message, _ int) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, m := range ms {
+		w.out = append(w.out, append([]byte(nil), m.Buffers[0]...))
+	}
+	return len(ms), nil
+}
+
+func (w *recordingWriter) taken() [][]byte {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.out
 }

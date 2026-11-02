@@ -167,6 +167,20 @@ type Egress struct {
 	// throttle bounds category-8 OS/NIC egress-error logs to log-once-then-count
 	// per interface, so a sustained ENOBUFS storm cannot itself become an outage.
 	throttle *logging.Throttle
+
+	// sendQ, when non-nil, carries each flushed batch to this Egress's sender
+	// goroutine (StartSender); free holds the batches it has finished with.
+	sendQ    chan *egressBatch
+	free     chan *egressBatch
+	sendDone chan struct{}
+}
+
+// egressBatch is one flush's datagrams on their way to the sender goroutine:
+// what Egress.msgs, meta and pooledBufs held when the flush took them.
+type egressBatch struct {
+	msgs   [][]ipv6.Message
+	meta   []msgMeta
+	pooled []*[]byte
 }
 
 // msgMeta carries the per-message attributes needed to fire metrics at Flush
@@ -581,12 +595,18 @@ func isTransientSendErr(err error) bool {
 // lost at most one frame. Zero-progress retries are bounded (see
 // maxReliableRetries) so a wedged socket cannot hang the lane.
 func (e *Egress) Flush() {
+	if e.sendQ != nil {
+		e.flushToSender()
+		return
+	}
 	for i := range e.targets {
 		if len(e.msgs[i]) == 0 {
 			continue
 		}
 		if e.reliable {
-			e.flushReliable(i)
+			e.flushReliable(i, e.msgs[i], e.meta)
+			clear(e.msgs[i])
+			e.msgs[i] = e.msgs[i][:0]
 			continue
 		}
 		// writeBatchAll, not a bare WriteBatch: a partial write must be
@@ -625,8 +645,7 @@ func (e *Egress) Flush() {
 // transient errors back off briefly and retry up to maxReliableRetries, after
 // which (or on any hard error) the remainder is surrendered to the normal
 // write_error accounting.
-func (e *Egress) flushReliable(i int) {
-	msgs := e.msgs[i]
+func (e *Egress) flushReliable(i int, msgs []ipv6.Message, meta []msgMeta) {
 	off := 0
 	attempts := 0
 	var werr error
@@ -664,9 +683,86 @@ func (e *Egress) flushReliable(i int) {
 	if werr != nil || off < len(msgs) {
 		e.logWriteError(i, len(msgs), off, werr)
 	}
-	e.recordWrite(i, off, werr)
-	clear(e.msgs[i])
-	e.msgs[i] = e.msgs[i][:0]
+	e.recordMeta(i, off, werr, meta)
+}
+
+// StartSender moves this Egress's kernel writes onto a goroutine of their own:
+// Flush hands the batch over and returns, so the goroutine that frames the
+// datagrams does not also carry the sendmmsg. On a collapsed edge that syscall
+// is the larger half of a record's dispatch, since the sender's context also
+// runs the multicast loopback's delivery to the local sockets: about 12 ms of
+// a 21 ms record at 4 MiB, on one goroutine the lane's 47 records a second
+// (200 MB/s). depth bounds the batches in flight; Flush waits for a free one,
+// so a sender behind holds the dispatcher back rather than dropping anything.
+// One sender keeps the datagrams in order. Call before the first Enqueue, on a
+// reliable Egress, and StopSender when done.
+func (e *Egress) StartSender(depth int) {
+	if depth < 1 {
+		depth = 1
+	}
+	e.sendQ = make(chan *egressBatch, depth)
+	e.free = make(chan *egressBatch, depth+1)
+	e.sendDone = make(chan struct{})
+	for range depth + 1 {
+		e.free <- &egressBatch{msgs: make([][]ipv6.Message, len(e.targets))}
+	}
+	go e.sender()
+}
+
+// StopSender writes what was flushed and stops the sender. Writes after it
+// run on the caller's goroutine again. Safe with no sender started.
+func (e *Egress) StopSender() {
+	if e.sendQ == nil {
+		return
+	}
+	close(e.sendQ)
+	<-e.sendDone
+	e.sendQ = nil
+}
+
+func (e *Egress) sender() {
+	defer close(e.sendDone)
+	for b := range e.sendQ {
+		for i := range e.targets {
+			if len(b.msgs[i]) > 0 {
+				e.flushReliable(i, b.msgs[i], b.meta)
+				clear(b.msgs[i])
+				b.msgs[i] = b.msgs[i][:0]
+			}
+		}
+		for j, p := range b.pooled {
+			e.pool.Put(p)
+			b.pooled[j] = nil
+		}
+		b.pooled = b.pooled[:0]
+		b.meta = b.meta[:0]
+		e.free <- b
+	}
+}
+
+// flushToSender hands what is queued to the sender goroutine, swapping in the
+// queues of a batch it has finished with. The tee and the mirror took their
+// copies at enqueue, so they are handed their batches here, in order.
+func (e *Egress) flushToSender() {
+	if e.tee != nil {
+		e.tee.flush()
+	}
+	if e.mirror != nil {
+		e.mirror.flush()
+	}
+	if len(e.meta) == 0 {
+		return
+	}
+	b := <-e.free
+	e.msgs, b.msgs = b.msgs, e.msgs
+	e.meta, b.meta = b.meta, e.meta
+	e.pooledBufs, b.pooled = b.pooled, e.pooledBufs
+	for i := range e.msgs {
+		if e.msgs[i] == nil {
+			e.msgs[i] = make([]ipv6.Message, 0, cap(b.msgs[i]))
+		}
+	}
+	e.sendQ <- b
 }
 
 // logWriteError emits a category-8 (OS/NIC) log for a WriteBatch failure,
@@ -715,29 +811,34 @@ func errnoOf(err error) (syscall.Errno, bool) {
 // sendmmsg fails before any message is written, so sent is clamped to
 // [0, len(meta)] to keep both loops in bounds.
 func (e *Egress) recordWrite(targetIdx, sent int, err error) {
+	e.recordMeta(targetIdx, sent, err, e.meta)
+}
+
+// recordMeta is recordWrite over a batch's meta.
+func (e *Egress) recordMeta(targetIdx, sent int, err error, meta []msgMeta) {
 	if e.rec == nil {
 		return
 	}
 	if sent < 0 {
 		sent = 0
-	} else if sent > len(e.meta) {
-		sent = len(e.meta)
+	} else if sent > len(meta) {
+		sent = len(meta)
 	}
 	iface := e.targets[targetIdx].Iface.Name
 	if err != nil {
 		// Match the legacy behaviour: one EgressError per failing target.
 		e.rec.EgressError(iface, 0)
 	}
-	for j := 0; j < sent && j < len(e.meta); j++ {
-		m := e.meta[j]
+	for j := 0; j < sent && j < len(meta); j++ {
+		m := meta[j]
 		if m.ctrlLabel != "" {
 			e.rec.ControlFrameForwarded(m.ctrlLabel)
 		} else {
 			e.rec.PacketForwarded(iface, m.workerID, m.groupIdx, m.size)
 		}
 	}
-	for j := sent; j < len(e.meta); j++ {
-		m := e.meta[j]
+	for j := sent; j < len(meta); j++ {
+		m := meta[j]
 		e.rec.PacketDropped(iface, m.workerID, "write_error")
 	}
 }
