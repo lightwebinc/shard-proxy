@@ -1534,6 +1534,15 @@ func stampInPlace(raw []byte, ip [16]byte, groupIdx uint32, subtreeID [32]byte, 
 // contend on the same stripe mutex. Once the entry exists the seqNum
 // increment is lock-free via atomic.AddUint64.
 func (fw *Forwarder) nextSeq(ip [16]byte, groupIdx uint32, subtreeID [32]byte) (hashKey, seqNum uint64) {
+	return fw.reserveSeq(ip, groupIdx, subtreeID, 1)
+}
+
+// reserveSeq is nextSeq for n consecutive SeqNums at once: it returns the
+// flow's hashKey and the first of them, and the counter stands at first+n-1
+// after it, so n frames stamped first, first+1, ... are what n calls to
+// nextSeq would have stamped. One atomic add, so reservations by concurrent
+// callers never overlap.
+func (fw *Forwarder) reserveSeq(ip [16]byte, groupIdx uint32, subtreeID [32]byte, n int) (hashKey, first uint64) {
 	key := chainKey{ip: ip, grp: groupIdx, sub: subtreeID}
 	stripe := &fw.chains[stripeIndex(ip)]
 	stripe.mu.Lock()
@@ -1544,8 +1553,8 @@ func (fw *Forwarder) nextSeq(ip [16]byte, groupIdx uint32, subtreeID [32]byte) (
 	}
 	stripe.mu.Unlock()
 	hashKey = seqhash.Hash(ip, groupIdx, subtreeID)
-	seqNum = st.counter.Add(1)
-	return hashKey, seqNum
+	first = st.counter.Add(uint64(n)) - uint64(n) + 1
+	return hashKey, first
 }
 
 // stripeIndex maps a sender IP to one of chainStripes buckets via FNV-1a
