@@ -198,7 +198,11 @@ forwarder pipeline which enqueues outbound datagrams into a per-worker
 (one `sendmmsg(2)` syscall per egress interface). Per-flow `SeqNum`
 counters live in a 64-stripe map keyed on a hash of the sender IP, so
 concurrent workers contend on independent shards; once a flow's counter
-exists the increment is lock-free via `atomic.AddUint64`.
+exists the increment is lock-free via `atomic.AddUint64`. A caller that
+builds a record's datagrams off the dispatching goroutine admits it with
+`Forwarder.AdmitBEEF` (the checks, the claim and the flow's SeqNums, reserved
+in admission order) and fragments it into memory of its own with
+`Forwarder.FragmentBEEFInto`, which emits what `DispatchBEEF` would have.
 
 ### TCP ingress
 

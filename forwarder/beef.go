@@ -17,6 +17,8 @@ package forwarder
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"time"
@@ -277,142 +279,10 @@ func (fw *Forwarder) ProcessBEEF(egr *Egress, raw []byte, src net.Addr, workerID
 // processBEEF is ProcessBEEF; checkContentID is false for a frame this
 // forwarder built itself (DispatchBEEF).
 func (fw *Forwarder) processBEEF(egr *Egress, raw []byte, src net.Addr, workerID int, checkContentID bool) {
-	if fw.beefEngine == nil {
-		if fw.rec != nil {
-			fw.rec.PacketDropped(egrIface(egr), workerID, "beef_disabled")
-		}
+	bf, groupIdx, ok := fw.checkBEEF(egr, raw, src, workerID, checkContentID)
+	if !ok {
 		return
 	}
-	bf, err := frame.DecodeBEEF(raw)
-	if err != nil {
-		fw.log.Debug("beef frame decode error", "err", err, "len", len(raw))
-		if fw.rec != nil {
-			fw.rec.PacketDropped(egrIface(egr), workerID, "decode_error")
-		}
-		return
-	}
-
-	// The operator's object bound applies to EVERY acceptance path, not only the
-	// submission record: without this, pre-framing the object as FrameVer 0x09
-	// bypasses -beef-max-object-bytes entirely (BRC-149 makes the bound an
-	// ingress MUST). Whole frames are datagram/stream-bounded upstream, but the
-	// declared length is what downstream reassembly would allocate against.
-	// The payload is either the submission record verbatim or a bare object;
-	// the bound is on the OBJECT (BRC-149's ingress MUST), so a record may
-	// exceed it by its envelope and nothing more. It is the submitter's own
-	// bound (beefObjectBoundFor): an authenticated record SubmitBEEF admitted
-	// above the open bound must not be dropped here one step later. Only an
-	// object over the open bound pays for the policy lookup.
-	object, topics, err := objfmt.SplitBEEFPayload(bf.Payload)
-	if err != nil {
-		if fw.rec != nil {
-			fw.rec.PacketDropped(egrIface(egr), workerID, "beef_bad_record")
-		}
-		return
-	}
-	if fw.beefMaxObject > 0 && len(object) > fw.beefMaxObject && len(object) > fw.beefObjectBoundFor(src) {
-		if fw.rec != nil {
-			fw.rec.PacketDropped(egrIface(egr), workerID, "beef_oversize")
-		}
-		return
-	}
-
-	// The submission-record grammar enforces a topic count of 1..15 and the
-	// BEEF marker (objfmt.DecodeBEEFRecord and IsBEEFObject above), so a
-	// publisher that pre-frames its own FrameVer 0x09 must meet the same two
-	// conditions or it bypasses both. BRC-149 makes the marker an ingress
-	// MUST on every acceptance path, and a frame addressed to no topic is
-	// undeliverable by construction: it still costs a full fabric emission,
-	// and because an empty topic election matches every topic it lands on
-	// every aggregator consumer and is billed to them. A pre-framed RECORD
-	// must also put its first topic in the header slot, or the shard key and
-	// the names disagree and the edge matches a topic the publisher never
-	// led with.
-	//
-	// These checks sit BEFORE the dedup claim on purpose. A drop taken after
-	// the claim would burn the (ContentID, TopicID) key, so a corrected
-	// re-submission of the same object would be suppressed as a duplicate
-	// for the whole TTL.
-	//
-	// These are conformance checks, not an abuse control: a TopicID is an
-	// unverifiable hash, so anything other than the zero value is accepted
-	// here and only the delivery side can tell whether a consumer wanted it.
-	if bf.TopicID == ([32]byte{}) {
-		if fw.rec != nil {
-			fw.rec.PacketDropped(egrIface(egr), workerID, "beef_no_topic")
-		}
-		return
-	}
-	if topics != nil && bf.TopicID != objfmt.TopicID(topics[0]) {
-		if fw.rec != nil {
-			fw.rec.PacketDropped(egrIface(egr), workerID, "beef_topic_mismatch")
-		}
-		return
-	}
-	if !objfmt.IsBEEFObject(object) {
-		if fw.rec != nil {
-			fw.rec.PacketDropped(egrIface(egr), workerID, "beef_bad_marker")
-		}
-		return
-	}
-
-	// DeliverCount is the ingress's to set, never the publisher's: a
-	// pre-framed record stamped with 15 deliverable topics from an anonymous
-	// source is exactly the amplification the open path exists to refuse.
-	// Overwrite it from the policy for any frame that entered here (src set);
-	// relay and spine re-emission (src == nil) carry the door's value on.
-	if src != nil {
-		n := 1
-		if topics != nil {
-			n = len(topics)
-		}
-		raw[7] = uint8(fw.beefDeliverCount(src, n))
-		bf.DeliverCount = raw[7]
-	}
-
-	// Rate budgets are charged before the dedup claim, so a flood of
-	// duplicates costs the flooder its budget rather than being free. Relay
-	// and spine re-emission (src == nil) is exempt: those frames were already
-	// charged at the door where they entered.
-	if d := fw.beefLimit.allow(src, len(raw), time.Now()); d != rateAllow {
-		if fw.rec != nil {
-			fw.rec.PacketDropped(egrIface(egr), workerID, d.reason())
-		}
-		return
-	}
-
-	// A PRE-FRAMED submission carries its own ContentID, and the dedup key is
-	// SHA-256(ContentID ‖ TopicID). Taking that field on trust lets anyone
-	// CLAIM AN OBJECT THEY DO NOT HAVE: frame a topic with the ContentID of an
-	// object about to be published, win the claim, and every later copy of the
-	// real object is suppressed as a duplicate, fleet-wide, from one small
-	// frame with no account. That is targeted censorship of exactly the thing
-	// the plane exists to deliver. Recomputing it also restores BRC-148's
-	// "identity is the bytes" for consumers that trust the field.
-	//
-	// The record path never had this hole: it computes the ContentID itself
-	// (PrepareBEEF above), so a frame it built is not hashed a second time
-	// here (checkContentID false). Only pre-framing can present one.
-	//
-	// Placed AFTER the rate budget and BEFORE the claim, deliberately. SHA-256d
-	// costs ~2.8us at 256B and ~5.6ms at 1MiB (measured 2026-09-15), so hashing
-	// before the budget would let an unauthenticated flood burn CPU at line
-	// rate; after it, the cost is bounded by a budget the operator already
-	// chose. Relay and spine re-emission (src == nil) is exempt for the same
-	// reason the budget exempts it: the frame was verified at the door where it
-	// entered, and re-hashing at every hop multiplies the cost fleet-wide.
-	if checkContentID && src != nil && bf.ContentID != objfmt.ContentID(bf.Payload) {
-		if fw.rec != nil {
-			fw.rec.PacketDropped(egrIface(egr), workerID, "beef_bad_contentid")
-		}
-		return
-	}
-
-	if !fw.claimBEEFIngress(beefClaimKey(bf.ContentID, bf.TopicID), "brc148", egrIface(egr), workerID) {
-		return
-	}
-
-	groupIdx := fw.beefEngine.GroupIndex(&bf.TopicID)
 
 	if src != nil {
 		ip := addrToIPv6(src)
@@ -441,6 +311,150 @@ func (fw *Forwarder) processBEEF(egr *Egress, raw []byte, src net.Addr, workerID
 	}
 }
 
+// checkBEEF is the admission half of processBEEF: every check a FrameVer
+// 0x09 frame must pass, the DeliverCount overwrite, the rate budget and the
+// dedup claim, then the group the frame belongs to. ok is false for a drop,
+// which is recorded; egr only names the interface the drop is counted
+// against and may be nil.
+func (fw *Forwarder) checkBEEF(egr *Egress, raw []byte, src net.Addr, workerID int, checkContentID bool) (bf *frame.BEEFFrame, groupIdx uint32, ok bool) {
+	if fw.beefEngine == nil {
+		if fw.rec != nil {
+			fw.rec.PacketDropped(egrIface(egr), workerID, "beef_disabled")
+		}
+		return nil, 0, false
+	}
+	bf, err := frame.DecodeBEEF(raw)
+	if err != nil {
+		fw.log.Debug("beef frame decode error", "err", err, "len", len(raw))
+		if fw.rec != nil {
+			fw.rec.PacketDropped(egrIface(egr), workerID, "decode_error")
+		}
+		return nil, 0, false
+	}
+
+	// The operator's object bound applies to EVERY acceptance path, not only the
+	// submission record: without this, pre-framing the object as FrameVer 0x09
+	// bypasses -beef-max-object-bytes entirely (BRC-149 makes the bound an
+	// ingress MUST). Whole frames are datagram/stream-bounded upstream, but the
+	// declared length is what downstream reassembly would allocate against.
+	// The payload is either the submission record verbatim or a bare object;
+	// the bound is on the OBJECT (BRC-149's ingress MUST), so a record may
+	// exceed it by its envelope and nothing more. It is the submitter's own
+	// bound (beefObjectBoundFor): an authenticated record SubmitBEEF admitted
+	// above the open bound must not be dropped here one step later. Only an
+	// object over the open bound pays for the policy lookup.
+	object, topics, err := objfmt.SplitBEEFPayload(bf.Payload)
+	if err != nil {
+		if fw.rec != nil {
+			fw.rec.PacketDropped(egrIface(egr), workerID, "beef_bad_record")
+		}
+		return nil, 0, false
+	}
+	if fw.beefMaxObject > 0 && len(object) > fw.beefMaxObject && len(object) > fw.beefObjectBoundFor(src) {
+		if fw.rec != nil {
+			fw.rec.PacketDropped(egrIface(egr), workerID, "beef_oversize")
+		}
+		return nil, 0, false
+	}
+
+	// The submission-record grammar enforces a topic count of 1..15 and the
+	// BEEF marker (objfmt.DecodeBEEFRecord and IsBEEFObject above), so a
+	// publisher that pre-frames its own FrameVer 0x09 must meet the same two
+	// conditions or it bypasses both. BRC-149 makes the marker an ingress
+	// MUST on every acceptance path, and a frame addressed to no topic is
+	// undeliverable by construction: it still costs a full fabric emission,
+	// and because an empty topic election matches every topic it lands on
+	// every aggregator consumer and is billed to them. A pre-framed RECORD
+	// must also put its first topic in the header slot, or the shard key and
+	// the names disagree and the edge matches a topic the publisher never
+	// led with.
+	//
+	// These checks sit BEFORE the dedup claim on purpose. A drop taken after
+	// the claim would burn the (ContentID, TopicID) key, so a corrected
+	// re-submission of the same object would be suppressed as a duplicate
+	// for the whole TTL.
+	//
+	// These are conformance checks, not an abuse control: a TopicID is an
+	// unverifiable hash, so anything other than the zero value is accepted
+	// here and only the delivery side can tell whether a consumer wanted it.
+	if bf.TopicID == ([32]byte{}) {
+		if fw.rec != nil {
+			fw.rec.PacketDropped(egrIface(egr), workerID, "beef_no_topic")
+		}
+		return nil, 0, false
+	}
+	if topics != nil && bf.TopicID != objfmt.TopicID(topics[0]) {
+		if fw.rec != nil {
+			fw.rec.PacketDropped(egrIface(egr), workerID, "beef_topic_mismatch")
+		}
+		return nil, 0, false
+	}
+	if !objfmt.IsBEEFObject(object) {
+		if fw.rec != nil {
+			fw.rec.PacketDropped(egrIface(egr), workerID, "beef_bad_marker")
+		}
+		return nil, 0, false
+	}
+
+	// DeliverCount is the ingress's to set, never the publisher's: a
+	// pre-framed record stamped with 15 deliverable topics from an anonymous
+	// source is exactly the amplification the open path exists to refuse.
+	// Overwrite it from the policy for any frame that entered here (src set);
+	// relay and spine re-emission (src == nil) carry the door's value on.
+	if src != nil {
+		n := 1
+		if topics != nil {
+			n = len(topics)
+		}
+		raw[7] = uint8(fw.beefDeliverCount(src, n))
+		bf.DeliverCount = raw[7]
+	}
+
+	// Rate budgets are charged before the dedup claim, so a flood of
+	// duplicates costs the flooder its budget rather than being free. Relay
+	// and spine re-emission (src == nil) is exempt: those frames were already
+	// charged at the door where they entered.
+	if d := fw.beefLimit.allow(src, len(raw), time.Now()); d != rateAllow {
+		if fw.rec != nil {
+			fw.rec.PacketDropped(egrIface(egr), workerID, d.reason())
+		}
+		return nil, 0, false
+	}
+
+	// A PRE-FRAMED submission carries its own ContentID, and the dedup key is
+	// SHA-256(ContentID ‖ TopicID). Taking that field on trust lets anyone
+	// CLAIM AN OBJECT THEY DO NOT HAVE: frame a topic with the ContentID of an
+	// object about to be published, win the claim, and every later copy of the
+	// real object is suppressed as a duplicate, fleet-wide, from one small
+	// frame with no account. That is targeted censorship of exactly the thing
+	// the plane exists to deliver. Recomputing it also restores BRC-148's
+	// "identity is the bytes" for consumers that trust the field.
+	//
+	// The record path never had this hole: it computes the ContentID itself
+	// (PrepareBEEF above), so a frame it built is not hashed a second time
+	// here (checkContentID false). Only pre-framing can present one.
+	//
+	// Placed AFTER the rate budget and BEFORE the claim, deliberately. SHA-256d
+	// costs ~2.8us at 256B and ~5.6ms at 1MiB (measured 2026-09-15), so hashing
+	// before the budget would let an unauthenticated flood burn CPU at line
+	// rate; after it, the cost is bounded by a budget the operator already
+	// chose. Relay and spine re-emission (src == nil) is exempt for the same
+	// reason the budget exempts it: the frame was verified at the door where it
+	// entered, and re-hashing at every hop multiplies the cost fleet-wide.
+	if checkContentID && src != nil && bf.ContentID != objfmt.ContentID(bf.Payload) {
+		if fw.rec != nil {
+			fw.rec.PacketDropped(egrIface(egr), workerID, "beef_bad_contentid")
+		}
+		return nil, 0, false
+	}
+
+	if !fw.claimBEEFIngress(beefClaimKey(bf.ContentID, bf.TopicID), "brc148", egrIface(egr), workerID) {
+		return nil, 0, false
+	}
+
+	return bf, fw.beefEngine.GroupIndex(&bf.TopicID), true
+}
+
 // fragmentBEEF splits an oversized BEEF object into BRC-130 fragments
 // (OrigFrameVer 0x09). ContentID rides the fragment TxID slot (it is the
 // BRC-130 reassembly key and SHA-256d verification hash by construction),
@@ -454,36 +468,17 @@ func (fw *Forwarder) processBEEF(egr *Egress, raw []byte, src net.Addr, workerID
 // enough to fragment would silently reach only its first topic's
 // subscribers while a small one reached all of them.
 func (fw *Forwarder) fragmentBEEF(egr *Egress, bf *frame.BEEFFrame, ip [16]byte, groupIdx uint32, workerID int) {
-	payload := bf.Payload
-	origLen := uint32(len(payload))
-	dataSize := fw.fragDataSize
-
-	k := (len(payload) + dataSize - 1) / dataSize
-	if k > 65535 {
-		fw.log.Warn("beef fragment count exceeds 65535, dropping frame",
-			"content_prefix", fmt.Sprintf("%x", bf.ContentID[:4]),
-			"payload_len", len(payload),
-		)
-		if fw.rec != nil {
-			fw.rec.PacketDropped("", workerID, "frag_overflow")
-		}
+	k, ok := fw.beefFragTotal(bf, workerID)
+	if !ok {
 		return
 	}
 	if fw.rec != nil {
 		fw.rec.FrameFragmented(workerID, k)
 	}
 
-	fragTotal := uint16(k)
 	dst := fw.addrFor(groupIdx)
 
 	for i := 0; i < k; i++ {
-		start := i * dataSize
-		end := start + dataSize
-		if end > len(payload) {
-			end = len(payload)
-		}
-		fragData := payload[start:end]
-
 		hashKey, seqNum := fw.nextSeq(ip, groupIdx, beefZeroIngredient)
 		if egr == nil {
 			continue
@@ -491,26 +486,209 @@ func (fw *Forwarder) fragmentBEEF(egr *Egress, bf *frame.BEEFFrame, ip [16]byte,
 
 		bufPtr := egr.PoolGet()
 		buf := *bufPtr
-		n, err := frame.EncodeFragment(
-			buf,
-			bf.ContentID,
-			bf.TopicID,
-			hashKey,
-			seqNum,
-			origLen,
-			uint16(i),
-			fragTotal,
-			frame.FrameVerV9,
-			fragData,
-		)
+		n, err := fw.encodeBEEFFragment(buf, bf, i, k, hashKey, seqNum)
 		if err != nil {
 			fw.log.Error("EncodeFragment error", "err", err)
 			egr.pool.Put(bufPtr)
 			continue
 		}
-		// Carry DeliverCount through the fragment header's byte 7, the same
-		// slot the block and subtree paths use for their MsgType.
-		buf[7] = bf.DeliverCount
 		egr.EnqueueDataPooled(buf[:n], *dst, groupIdx, workerID, bufPtr)
 	}
+}
+
+// beefFragTotal is how many BRC-130 fragments bf's payload takes at the
+// fragment data size. ok is false past the 16-bit FragTotal, a drop recorded
+// as frag_overflow.
+func (fw *Forwarder) beefFragTotal(bf *frame.BEEFFrame, workerID int) (k int, ok bool) {
+	k = (len(bf.Payload) + fw.fragDataSize - 1) / fw.fragDataSize
+	if k > 65535 {
+		fw.log.Warn("beef fragment count exceeds 65535, dropping frame",
+			"content_prefix", fmt.Sprintf("%x", bf.ContentID[:4]),
+			"payload_len", len(bf.Payload),
+		)
+		if fw.rec != nil {
+			fw.rec.PacketDropped("", workerID, "frag_overflow")
+		}
+		return 0, false
+	}
+	return k, true
+}
+
+// encodeBEEFFragment writes fragment i of k of bf into buf with the flow's
+// hashKey and this fragment's seqNum, and returns the datagram's length.
+func (fw *Forwarder) encodeBEEFFragment(buf []byte, bf *frame.BEEFFrame, i, k int, hashKey, seqNum uint64) (int, error) {
+	payload := bf.Payload
+	start := i * fw.fragDataSize
+	end := min(start+fw.fragDataSize, len(payload))
+	n, err := frame.EncodeFragment(
+		buf,
+		bf.ContentID,
+		bf.TopicID,
+		hashKey,
+		seqNum,
+		uint32(len(payload)),
+		uint16(i),
+		uint16(k),
+		frame.FrameVerV9,
+		payload[start:end],
+	)
+	if err != nil {
+		return 0, err
+	}
+	// Carry DeliverCount through the fragment header's byte 7, the same
+	// slot the block and subtree paths use for their MsgType.
+	buf[7] = bf.DeliverCount
+	return n, nil
+}
+
+// BEEFAdmission is a prepared record [Forwarder.AdmitBEEF] admitted for a
+// caller to fragment itself with [Forwarder.FragmentBEEFInto]: the checks
+// DispatchBEEF runs, the dedup claim, the group, and the flow's SeqNums,
+// reserved in admission order. It is read-only once returned, so the
+// fragmenting may run on any goroutine, in parallel with other records', and
+// still stamp exactly what the in-line path would have.
+type BEEFAdmission struct {
+	raw      []byte
+	bf       frame.BEEFFrame
+	ip       [16]byte
+	groupIdx uint32
+	dst      *net.UDPAddr
+	hashKey  uint64
+	firstSeq uint64
+	k        int // fragments; 0 = the whole frame, one datagram
+	workerID int
+}
+
+// Datagrams is how many datagrams FragmentBEEFInto will produce.
+func (a *BEEFAdmission) Datagrams() int {
+	if a.k > 0 {
+		return a.k
+	}
+	return 1
+}
+
+// Bytes is the sum of those datagrams' lengths, for a caller that stages
+// them contiguously.
+func (a *BEEFAdmission) Bytes() int {
+	if a.k > 0 {
+		return a.k*frame.HeaderSizeV3 + len(a.bf.Payload)
+	}
+	return len(a.raw)
+}
+
+// Dst is the multicast destination every datagram of the record goes to
+// (address and port; the caller adds the interface zone). Shared, read-only.
+func (a *BEEFAdmission) Dst() *net.UDPAddr { return a.dst }
+
+// GroupIdx is the record's plane group, what the egress metrics key on.
+func (a *BEEFAdmission) GroupIdx() uint32 { return a.groupIdx }
+
+// Seqs is the flow's HashKey and the first of the Datagrams consecutive
+// SeqNums the record was reserved (0, 0 when the frame is not stamped: a
+// nil source, or a whole frame the submitter pre-stamped).
+func (a *BEEFAdmission) Seqs() (hashKey, first uint64) { return a.hashKey, a.firstSeq }
+
+// AdmitBEEF is DispatchBEEF up to the point the datagrams are built: the
+// submission is recorded and metered, the frame checked, budgeted and
+// claimed, and its SeqNums reserved on the (source, group) flow, in call
+// order. nil means the record was refused or dropped, recorded exactly as
+// DispatchBEEF records it. The caller then fragments the admission with
+// [Forwarder.FragmentBEEFInto], on any goroutine, and sends the datagrams in
+// admission order. egr only names the interface drops are counted against
+// and may be nil; nothing is enqueued on it.
+//
+// Reserving on admission is what keeps a flow's SeqNums in emission order
+// when records are fragmented in parallel: the counters are shared with
+// every other path that stamps the flow (the UDP lane, DispatchBEEF), so
+// the calls to this method must be made in the order the records will
+// leave.
+func (fw *Forwarder) AdmitBEEF(egr *Egress, p *PreparedBEEF, src net.Addr, workerID int) *BEEFAdmission {
+	if p == nil {
+		return nil
+	}
+	if fw.rec != nil {
+		defer fw.rec.BEEFSubmission(p.result)
+	}
+	if p.frame == nil {
+		return nil
+	}
+	if fw.rec != nil {
+		fw.rec.IngressMetered(metrics.IngressClassBEEF, false, len(p.frame))
+		fw.rec.BEEFTopics(p.topics, p.deliver)
+	}
+	bf, groupIdx, ok := fw.checkBEEF(egr, p.frame, src, workerID, false)
+	if !ok {
+		return nil
+	}
+	a := &BEEFAdmission{raw: p.frame, bf: *bf, groupIdx: groupIdx, dst: fw.addrFor(groupIdx), workerID: workerID}
+	if src == nil {
+		return a
+	}
+	a.ip = addrToIPv6(src)
+	if fw.fragDataSize > 0 && len(bf.Payload) > fw.fragDataSize {
+		k, ok := fw.beefFragTotal(bf, workerID)
+		if !ok {
+			return nil
+		}
+		a.k = k
+		a.hashKey, a.firstSeq = fw.reserveSeq(a.ip, groupIdx, beefZeroIngredient, k)
+		return a
+	}
+	stampInPlace(p.frame, a.ip, groupIdx, beefZeroIngredient, fw)
+	a.hashKey = binary.BigEndian.Uint64(p.frame[40:48])
+	a.firstSeq = binary.BigEndian.Uint64(p.frame[48:56])
+	return a
+}
+
+// ReserveBEEFSeqs reserves n consecutive SeqNums on the BEEF flow of src and
+// groupIdx (the zero ingredient, as every BEEF frame is stamped) and returns
+// the flow's HashKey and the first of them; the next reservation or stamp on
+// the flow follows at first+n. AdmitBEEF reserves through it; it is exposed
+// for a caller that stamps BEEF datagrams of its own on the same counters.
+func (fw *Forwarder) ReserveBEEFSeqs(src net.Addr, groupIdx uint32, n int) (hashKey, first uint64) {
+	return fw.reserveSeq(addrToIPv6(src), groupIdx, beefZeroIngredient, n)
+}
+
+// errBEEFAlloc is FragmentBEEFInto's error for an alloc that did not return
+// the length asked for.
+var errBEEFAlloc = errors.New("forwarder: FragmentBEEFInto: alloc returned the wrong length")
+
+// FragmentBEEFInto builds the admitted record's datagrams, each in memory
+// from alloc(n) (a slice of exactly n bytes), and returns them in emission
+// order: the BRC-130 fragments DispatchBEEF would have enqueued, byte for
+// byte, with the reserved SeqNums, or the one whole frame. alloc is called
+// once per datagram in that order, so an allocator that carves one
+// contiguous buffer lays them out back to back, all but the last of equal
+// length. It records the fragmentation metric the in-line path records and
+// may run on any goroutine. A nil error means every datagram was built; on
+// an error the record must be dropped whole, since its SeqNums are spent.
+func (fw *Forwarder) FragmentBEEFInto(a *BEEFAdmission, alloc func(n int) []byte) ([][]byte, error) {
+	if a == nil {
+		return nil, errors.New("forwarder: FragmentBEEFInto: nil admission")
+	}
+	if a.k == 0 {
+		b := alloc(len(a.raw))
+		if len(b) != len(a.raw) {
+			return nil, errBEEFAlloc
+		}
+		copy(b, a.raw)
+		return [][]byte{b}, nil
+	}
+	if fw.rec != nil {
+		fw.rec.FrameFragmented(a.workerID, a.k)
+	}
+	out := make([][]byte, 0, a.k)
+	for i := range a.k {
+		size := frame.HeaderSizeV3 + min(fw.fragDataSize, len(a.bf.Payload)-i*fw.fragDataSize)
+		b := alloc(size)
+		if len(b) != size {
+			return nil, errBEEFAlloc
+		}
+		n, err := fw.encodeBEEFFragment(b, &a.bf, i, a.k, a.hashKey, a.firstSeq+uint64(i))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, b[:n])
+	}
+	return out, nil
 }
