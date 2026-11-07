@@ -62,7 +62,7 @@ is built with `go build ./cmd/latency-sink`.
 
 ## Requirements
 
-- Go 1.26 or later (`go.mod` floor: 1.26.2)
+- Go 1.26 or later
 - Linux kernel 3.9+, FreeBSD 12.3+ (for `SO_REUSEPORT`), macOS
 - IPv6 enabled on the egress interface(s)
 - Multicast routing / MLD snooping configured for your subscriber fabric
