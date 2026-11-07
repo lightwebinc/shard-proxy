@@ -25,7 +25,7 @@ func (p *boundPolicy) MaxObjectBytes(src net.IP) int {
 }
 
 // D9: an authenticated source may exceed the open bound, but a policy must
-// never TIGHTEN below the operator's floor — that would let a policy bug
+// never TIGHTEN below the operator's floor, that would let a policy bug
 // silently reject traffic the operator configured as acceptable.
 func TestBEEFObjectBoundPerSource(t *testing.T) {
 	fw := &Forwarder{beefMaxObject: 1 << 20}
@@ -47,7 +47,7 @@ func TestBEEFObjectBoundPerSource(t *testing.T) {
 	// A policy returning LESS than the operator's bound must be ignored.
 	fw.SetBEEFSubmitPolicy(&boundPolicy{auth: auth, lift: 1024})
 	if got := fw.beefObjectBoundFor(&net.UDPAddr{IP: auth}); got != 1<<20 {
-		t.Errorf("policy tightened the bound to %d — must never go below the operator floor", got)
+		t.Errorf("policy tightened the bound to %d: must never go below the operator floor", got)
 	}
 }
 

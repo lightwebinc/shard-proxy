@@ -15,7 +15,7 @@
 //
 // SO_REUSEPORT (Linux 3.9+) allows multiple sockets to bind to the same
 // address and port. The kernel hashes the 4-tuple of the incoming datagram
-// to select which socket — and therefore which worker goroutine — receives
+// to select which socket (and therefore which worker goroutine) receives
 // each packet. This provides CPU-local receive processing with no shared
 // data structures on the ingress path.
 //
@@ -162,7 +162,7 @@ func (w *Worker) Run(listenAddr string, listenPort int, done <-chan struct{}) er
 	// Share the listen port across all worker sockets and have the kernel
 	// load-balance incoming datagrams across them. The option differs by OS:
 	// Linux SO_REUSEPORT load-balances; FreeBSD SO_REUSEPORT does not (it only
-	// permits the shared bind) and requires SO_REUSEPORT_LB for balancing —
+	// permits the shared bind) and requires SO_REUSEPORT_LB for balancing:
 	// without it only a handful of workers receive. setReusePortLB picks the
 	// right one per platform (see reuseport_*.go).
 	if err := setReusePortLB(fd); err != nil {

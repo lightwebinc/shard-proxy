@@ -11,7 +11,7 @@ import (
 )
 
 // fakeBatchWriter scripts WriteBatch results so the reliable lane's retry loop
-// can be exercised against partial and errored sends — impossible against a
+// can be exercised against partial and errored sends: impossible against a
 // healthy kernel socket, which is exactly why the naive "stream N frames,
 // assert all egress" test would pass while masking a partial-send drop.
 type fakeBatchWriter struct {
@@ -45,7 +45,7 @@ func (f *fakeBatchWriter) WriteBatch(ms []ipv6.Message, _ int) (int, error) {
 }
 
 // reliableEgress builds a one-target reliable Egress whose batch writer is the
-// fake (swapped in after construction — the internal seam batchWriter exists
+// fake (swapped in after construction, the internal seam batchWriter exists
 // for exactly this).
 func reliableEgress(t *testing.T, fake *fakeBatchWriter) *Egress {
 	t.Helper()
@@ -68,7 +68,7 @@ func enqueueN(egr *Egress, n int) {
 // A partial WriteBatch on the reliable lane must re-submit the remainder, not
 // drop it: the batched-cadence TCP path queues up to a whole batch per flush,
 // and the old per-frame path never lost more than one frame to a backpressure
-// event. Script: 3-of-10 sent, then 2 with ENOBUFS, then the rest — all 10
+// event. Script: 3-of-10 sent, then 2 with ENOBUFS, then the rest, all 10
 // must reach the wire.
 func TestReliableFlushRetriesPartialSend(t *testing.T) {
 	fake := &fakeBatchWriter{script: []struct {
@@ -77,21 +77,21 @@ func TestReliableFlushRetriesPartialSend(t *testing.T) {
 	}{
 		{n: 3},                       // partial, no error
 		{n: 2, err: syscall.ENOBUFS}, // partial with transient error
-		{n: 0, err: syscall.ENOBUFS}, // zero progress, transient — retry
+		{n: 0, err: syscall.ENOBUFS}, // zero progress, transient: retry
 	}}
 	egr := reliableEgress(t, fake)
 	enqueueN(egr, 10)
 	egr.Flush()
 	if fake.sent != 10 {
-		t.Fatalf("reliable flush delivered %d of 10 — partial-send remainder was dropped", fake.sent)
+		t.Fatalf("reliable flush delivered %d of 10: partial-send remainder was dropped", fake.sent)
 	}
 	if len(egr.msgs[0]) != 0 || len(egr.meta) != 0 {
 		t.Fatalf("queues not reset after flush: msgs=%d meta=%d", len(egr.msgs[0]), len(egr.meta))
 	}
 }
 
-// A hard (non-transient) error must surrender the remainder — bounded loss with
-// accounting — not spin. EPERM (a firewall drop) is the canonical case.
+// A hard (non-transient) error must surrender the remainder: bounded loss with
+// accounting, not spin. EPERM (a firewall drop) is the canonical case.
 func TestReliableFlushSurrendersOnHardError(t *testing.T) {
 	fake := &fakeBatchWriter{script: []struct {
 		n   int
@@ -111,7 +111,7 @@ func TestReliableFlushSurrendersOnHardError(t *testing.T) {
 }
 
 // Sustained zero-progress transient errors must exhaust the bounded retry
-// budget and return — a wedged socket cannot hang the submission lane.
+// budget and return, a wedged socket cannot hang the submission lane.
 func TestReliableFlushBoundedRetryBudget(t *testing.T) {
 	script := make([]struct {
 		n   int
@@ -136,7 +136,7 @@ func TestReliableFlushBoundedRetryBudget(t *testing.T) {
 }
 
 // The non-reliable (UDP) lane must keep drop-and-count semantics: one partial
-// WriteBatch, no retry — lossy-lane throughput must not inherit the reliable
+// WriteBatch, no retry: lossy-lane throughput must not inherit the reliable
 // lane's blocking behaviour.
 func TestNonReliableFlushDoesNotRetry(t *testing.T) {
 	fake := &fakeBatchWriter{script: []struct {
@@ -159,7 +159,7 @@ func TestNonReliableFlushDoesNotRetry(t *testing.T) {
 
 // FlushVia (the ingress→spine pipeline path) must honor the reliable lane the
 // same way Flush does: a transient via-fn error retries the SAME message with
-// the bounded budget instead of surrendering the whole batch remainder — a
+// the bounded budget instead of surrendering the whole batch remainder, a
 // via transport self-heals by re-dialing on the next call, so pre-batching a
 // disconnect lost ~1 frame and must not now lose up to a full batch.
 func TestReliableFlushViaRetriesTransientError(t *testing.T) {
@@ -181,7 +181,7 @@ func TestReliableFlushViaRetriesTransientError(t *testing.T) {
 		return nil
 	})
 	if delivered != 10 {
-		t.Fatalf("reliable FlushVia delivered %d of 10 — remainder surrendered on transient error", delivered)
+		t.Fatalf("reliable FlushVia delivered %d of 10: remainder surrendered on transient error", delivered)
 	}
 
 	// Non-reliable keeps the original first-error surrender.
@@ -233,7 +233,7 @@ func TestSharedTeeSocketServesMultipleEgresses(t *testing.T) {
 		t.Fatalf("shared tee delivered %d datagrams, want 2 (socket closed early?)", len(got))
 	}
 	if egr2.RetryTeeFailed() != 0 {
-		t.Errorf("egress 2 tee failures: %d — shared socket was closed under it", egr2.RetryTeeFailed())
+		t.Errorf("egress 2 tee failures: %d, shared socket was closed under it", egr2.RetryTeeFailed())
 	}
 }
 
@@ -271,7 +271,7 @@ func TestDispatchBareTxCopiesUnderDeferredFlush(t *testing.T) {
 	tx := bareEF1in1out()
 	orig := append([]byte(nil), tx...)
 	fw.DispatchBareTx(egr, tx, &net.UDPAddr{IP: net.ParseIP("::1")}, 0)
-	// Reuse/overwrite the caller's buffer BEFORE flush — the objfmt reader
+	// Reuse/overwrite the caller's buffer BEFORE flush, the objfmt reader
 	// window would be reused exactly like this on the next record.
 	for i := range tx {
 		tx[i] = 0xFF
@@ -287,7 +287,7 @@ func TestDispatchBareTxCopiesUnderDeferredFlush(t *testing.T) {
 	// ORIGINAL tx bytes, not the 0xFF-overwritten buffer.
 	pay := sunk[0][92:]
 	if len(pay) < len(orig) || string(pay[:len(orig)]) != string(orig) {
-		t.Fatal("egressed frame aliased the caller buffer — bare tx was not copied")
+		t.Fatal("egressed frame aliased the caller buffer: bare tx was not copied")
 	}
 }
 

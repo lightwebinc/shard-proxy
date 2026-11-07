@@ -19,7 +19,7 @@ else
     #
     # The kernel does NOT provide that route for loopback: addrconf sends
     # ARPHRD_LOOPBACK down init_loopback() (which adds only ::1/128), while
-    # addrconf_add_mroute() — the thing that installs ff00::/8 — is reached only
+    # addrconf_add_mroute() (the thing that installs ff00::/8) is reached only
     # for non-loopback devices. So it must be provisioned once, out of band.
     #
     # This used to attempt the mutation here as `... 2>/dev/null || true`. Run as
@@ -108,7 +108,7 @@ if [ "$USE_METRICS" = "0" ]; then
         exit 1
     fi
 else
-    # Linux: assert via Prometheus metrics — check bsp_packets_forwarded_total >= RECV_COUNT
+    # Linux: assert via Prometheus metrics, check bsp_packets_forwarded_total >= RECV_COUNT
     # Give OTel a moment to flush to the Prometheus scrape endpoint
     sleep 1
     FORWARDED=$(curl -sf "http://127.0.0.1:$METRICS_PORT/metrics" \

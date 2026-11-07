@@ -2,7 +2,7 @@
 // IPv6 socket, derives a multicast group address from the transaction ID's
 // top N bits, and retransmits each datagram verbatim to the derived group.
 //
-// Multiple worker goroutines — one per CPU by default — each bind an
+// Multiple worker goroutines (one per CPU by default) each bind an
 // independent SO_REUSEPORT socket to the listen port. The kernel distributes
 // incoming datagrams across them, providing CPU-local processing with no
 // userspace coordination on the ingress path.
@@ -213,7 +213,7 @@ func main() {
 		slog.Info("BRC-130 fragmentation enabled", "frag_mtu", cfg.FragMTU,
 			"max_unfragmented_payload", cfg.FragMTU-140)
 	} else {
-		// Explicitly disabled. This is not "no fragmentation" — it is a hard
+		// Explicitly disabled. This is not "no fragmentation": it is a hard
 		// payload ceiling of MTU-140 bytes (1360 at 1500), above which frames
 		// become oversize datagrams the fabric cannot carry. Every subtree and
 		// block frame is above it. Loud on purpose: this state is silent on the
@@ -297,7 +297,7 @@ func main() {
 	// subtree-data frames are dropped here; the miner multicast port is
 	// deprecated (2026-07-07). Blocks/subtrees enter only as BRC-144/BRC-143
 	// push frames on the proxy's tunnel-bound push ports, reframed to the
-	// fabric — never accepted as multicast frames from a submitter.
+	// fabric, never accepted as multicast frames from a submitter.
 	userClass := forwarder.IngressTransaction
 	for i := range cfg.NumWorkers {
 		w := worker.New(i, fwd, ifaces, rec)
@@ -316,7 +316,7 @@ func main() {
 
 	// Start TCP ingress if configured. Mark it as a /readyz prerequisite
 	// before launching the goroutine so /readyz returns 503 until the
-	// listener has actually bound — otherwise senders can race the bind
+	// listener has actually bound, otherwise senders can race the bind
 	// (TCP_LISTEN_PORT > 0 ⇒ readyz must reflect TCP reachability, not
 	// just worker count).
 	if cfg.TCPListenPort > 0 {
@@ -336,7 +336,7 @@ func main() {
 	// Push-frame ingest lanes (replaces the deprecated miner multicast port).
 	// Each is a dedicated single-class TCP port carrying header-stripped push
 	// objects, reframed to the fabric: subtree → BRC-132, block → BRC-131
-	// carrying the BRC-144 body verbatim. Privileged — bind tunnel-side.
+	// carrying the BRC-144 body verbatim. Privileged: bind tunnel-side.
 	if cfg.SubtreeListenPort > 0 {
 		oi := worker.NewObjectIngress(fwd, ifaces, rec, objfmt.ClassSubtree)
 		oi.SetRetryTee(cfg.RetryTee)
@@ -360,7 +360,7 @@ func main() {
 		}()
 		slog.Info("block push ingress enabled (BRC-144 → BRC-131 body-verbatim)", "listen_port", cfg.BlockListenPort)
 	}
-	// Optional dedicated BRC-148 BEEF lane (flow separation / LB only —
+	// Optional dedicated BRC-148 BEEF lane (flow separation / LB only:
 	// records also ride the tx port as an open class).
 	if cfg.BEEFListenPort > 0 {
 		oi := worker.NewObjectIngress(fwd, ifaces, rec, objfmt.ClassBEEF)
@@ -552,7 +552,7 @@ func main() {
 	// causes the runtime to write the signal value into sig.
 	//
 	// <-sig is a blocking channel receive. It suspends the main goroutine
-	// here — the proxy is running, workers are processing packets — until
+	// here (the proxy is running, workers are processing packets) until
 	// a value arrives in the channel. The received value is captured (not
 	// discarded) so it can be included in the shutdown log line.
 	sig := make(chan os.Signal, 1)

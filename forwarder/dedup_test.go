@@ -66,7 +66,7 @@ func TestProcessV2_DedupClaimLost_FrameDropped(t *testing.T) {
 	if d.denied.Load() != 1 {
 		t.Errorf("denied = %d, want 1", d.denied.Load())
 	}
-	// SeqNum must remain zero — frame was dropped before stamping.
+	// SeqNum must remain zero: frame was dropped before stamping.
 	if raw[55] != 0 {
 		t.Errorf("frame was stamped despite dedup loss (byte 55 = 0x%x)", raw[55])
 	}
@@ -81,7 +81,7 @@ func TestProcessV2_SecondCallDedups(t *testing.T) {
 	tgts := makeEgress(t, fw, conn)
 	src := &net.UDPAddr{IP: net.ParseIP("::1"), Port: 12345}
 
-	// Two frames with the same TxID — second must be deduped.
+	// Two frames with the same TxID: second must be deduped.
 	raw1 := buildV2Frame(t, 0xCD, 0, []byte("p1"))
 	raw2 := buildV2Frame(t, 0xCD, 0, []byte("p2"))
 	fw.Process(tgts, raw1, src, 0)

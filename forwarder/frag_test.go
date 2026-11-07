@@ -222,7 +222,7 @@ func TestFragment_HashKeyStable(t *testing.T) {
 func TestProcess_SmallPayload_NotFragmented(t *testing.T) {
 	const mtu = 300
 	const fragDataSize = mtu - ipv6UDPOverhead
-	payload := make([]byte, fragDataSize) // exactly at threshold — not fragmented
+	payload := make([]byte, fragDataSize) // exactly at threshold, not fragmented
 	raw := buildV2Frame(t, 0x10, 0, payload)
 
 	fw := makeFragForwarder(mtu)
@@ -284,7 +284,7 @@ func TestProcess_FragDisabled_LargePayload_NotSplit(t *testing.T) {
 
 // TestFragNoDatagramExceedsPathMTU is the delivery invariant BRC-130 exists to
 // hold: with fragmentation enabled at the path MTU, NO emitted datagram may exceed
-// that MTU. Violating it does not degrade delivery, it ends it — an oversize
+// that MTU. Violating it does not degrade delivery, it ends it, an oversize
 // datagram can only cross the fabric via IPv6 IP-layer fragmentation, which
 // multicast paths drop, and the sender sees no error at all.
 //
@@ -292,7 +292,7 @@ func TestProcess_FragDisabled_LargePayload_NotSplit(t *testing.T) {
 // 40 (IPv6) + 8 (UDP) + 92 (header) + payload, so everything above mtu-140 (1360
 // at 1500) went out oversize and vanished. The sweep straddles that old cliff.
 func TestFragNoDatagramExceedsPathMTU(t *testing.T) {
-	const pathMTU = 1400 // ip6gre inner MTU on a 1500 underlay — the fabric's real limit
+	const pathMTU = 1400 // ip6gre inner MTU on a 1500 underlay, the fabric's real limit
 	fw := makeFragForwarder(pathMTU)
 	conn, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.ParseIP("::1")})
 	if err != nil {

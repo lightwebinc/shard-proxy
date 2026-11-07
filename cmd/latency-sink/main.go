@@ -146,7 +146,7 @@ func main() {
 	duration := flag.Duration("duration", 70*time.Second, "receive window (0 = run forever; probe mode)")
 	jsonOut := flag.String("json", "", "write JSON report to this path")
 	metricsAddr := flag.String("metrics-addr", "",
-		"expose Prometheus metrics on this addr (e.g. :9300) — probe mode: rolling-window percentiles")
+		"expose Prometheus metrics on this addr (e.g. :9300), probe mode: rolling-window percentiles")
 	window := flag.Duration("window", 60*time.Second, "rolling window for probe-mode percentiles")
 	flag.Parse()
 

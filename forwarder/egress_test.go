@@ -11,7 +11,7 @@ import (
 )
 
 // makeEgressNoFrag constructs an Egress backed by loopback conns with
-// fragmentation disabled — pool is nil. Used by Egress unit tests that
+// fragmentation disabled: pool is nil. Used by Egress unit tests that
 // don't exercise the fragment path.
 func makeEgressNoFrag(t *testing.T, batchHint int, n int) (*Egress, []*net.UDPConn) {
 	t.Helper()
@@ -175,7 +175,7 @@ func TestRecordWrite_NegativeSent(t *testing.T) {
 
 func TestFlush_MultipleCycles_QueueGrowthBounded(t *testing.T) {
 	// Append/Flush/Append should reuse the underlying msgs[i] backing
-	// arrays — capacity must not grow unboundedly across cycles.
+	// arrays: capacity must not grow unboundedly across cycles.
 	egr, _ := makeEgressNoFrag(t, 4, 1)
 	dst := net.UDPAddr{IP: net.ParseIP("ff05::b:1"), Port: 9001}
 	for i := 0; i < 100; i++ {

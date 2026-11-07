@@ -14,7 +14,7 @@
 //
 // All OTel instrument handles (Int64Counter, Int64Histogram, etc.) are
 // allocated once at [New] time and stored on [Recorder]. Record methods
-// use them directly — no map lookups on the critical path.
+// use them directly, no map lookups on the critical path.
 //
 // Per-(interface, worker) and per-(interface, group) Prometheus counter
 // handles are integer-indexed under [ifaceState] (slice by workerID / group),
@@ -122,25 +122,25 @@ type Recorder struct {
 	startTime   time.Time
 	readyCount  atomic.Int32
 
-	// ── Hot-path metrics — direct prometheus client_golang ──
+	// ── Hot-path metrics: direct prometheus client_golang ──
 	// OTel SDK Add() was profiled at ~⅓ of total CPU on the 256 B Bitcoin
 	// hot path. Direct Prometheus skips attribute hashing, exemplar
 	// filtering, aggregation pipeline, allocator churn. shard-proxy never
 	// used OTel beyond Prometheus scraping, so the SDK was pure overhead.
 
-	// Per-packet ingress — labels: worker, iface (worker, network_interface_name).
+	// Per-packet ingress: labels: worker, iface (worker, network_interface_name).
 	promRxPackets *promclient.CounterVec
 	promRxBytes   *promclient.CounterVec
 	promRxDrops   *promclient.CounterVec // also labelled by reason
 	promRxSize    *promclient.HistogramVec
 
-	// Per-packet egress — labels: worker, iface.
+	// Per-packet egress: labels: worker, iface.
 	promTxPackets     *promclient.CounterVec
 	promTxBytes       *promclient.CounterVec
 	promTxEgressErrs  *promclient.CounterVec
 	promTxIngressErrs *promclient.CounterVec
 
-	// Accepted-ingress volume by frame class and admission tier — labels:
+	// Accepted-ingress volume by frame class and admission tier: labels:
 	// class, tier. Tracked for operator accounting so downstream tooling has
 	// data without re-instrumenting; miners emit block/coinbase/subtree, tx
 	// senders emit tx. Handles are pre-resolved (small fixed label set) so the
@@ -150,7 +150,7 @@ type Recorder struct {
 	ingressBytesH      [ingressClassCount][2]promclient.Counter
 	ingressPacketsH    [ingressClassCount][2]promclient.Counter
 
-	// Per-flow / per-group — exposed as labels: iface, group. Backed by a
+	// Per-flow / per-group: exposed as labels: iface, group. Backed by a
 	// per-worker-sharded counter store summed at scrape by flowCollector, so the
 	// hot-path increment is single-writer (no cross-core contention).
 	flowPacketsDesc *promclient.Desc
@@ -186,7 +186,7 @@ type Recorder struct {
 	tcpConnections      metric.Int64Counter
 	tcpBytesReceived    metric.Int64Counter
 
-	// Ingress TxID dedup — TxidClaim* are per-packet on the hot path
+	// Ingress TxID dedup: TxidClaim* are per-packet on the hot path
 	// when dedup is on, so they are direct prometheus.Counter handles
 	// keyed by prefix (one allocation per distinct prefix at startup).
 	ingressDeduped        metric.Int64Counter // by worker, iface, frame_type (cold)
@@ -224,7 +224,7 @@ type Recorder struct {
 	manifestAdoption      metric.Int64Counter
 	manifestReshardEmit   metric.Int64Counter
 	// Unix seconds of the most recent divergence per field. Read by an
-	// observable gauge, so a stale timestamp is the signal — a field that
+	// observable gauge, so a stale timestamp is the signal, a field that
 	// stops diverging keeps its last value rather than disappearing.
 	lastDivergenceMu sync.Mutex
 	lastDivergence   map[string]int64
@@ -260,7 +260,7 @@ func New(instanceID string, numWorkers int, otlpEndpoint string, otlpInterval ti
 		return nil, fmt.Errorf("metrics: build resource: %w", err)
 	}
 
-	// Dedicated Prometheus registry — avoids polluting prometheus.DefaultRegisterer.
+	// Dedicated Prometheus registry: avoids polluting prometheus.DefaultRegisterer.
 	reg := promclient.NewRegistry()
 	promExp, err := prometheusexporter.New(
 		prometheusexporter.WithRegisterer(reg),
@@ -442,7 +442,7 @@ func New(instanceID string, numWorkers int, otlpEndpoint string, otlpInterval ti
 	}
 
 	// BRC-139 manifest consumer family. Registered here (not just tracked in
-	// atomics) so proxy-side divergence is observable — without it, half the
+	// atomics) so proxy-side divergence is observable, without it, half the
 	// fleet reports nothing and a cross-peer disagreement looks like silence.
 	if r.manifestDivergence, err = meter.Int64Counter("multicast_manifest_divergence_total",
 		metric.WithDescription("Authoritative-peer disagreements observed by the auto-config evaluator (BRC-139 §Divergence telemetry)")); err != nil {
@@ -634,7 +634,7 @@ func (r *Recorder) PacketReceived(iface string, workerID int, size int) {
 // written to bsp_packets_dropped_total{reason}; the live set is whatever the
 // forwarder and worker packages pass (decode_error, write_error, ingress_not_ef,
 // bare_tx_malformed, payload_hash_mismatch, bundle_short, …). Keep it a small
-// bounded vocabulary — it is a metric label.
+// bounded vocabulary: it is a metric label.
 func (r *Recorder) PacketDropped(iface string, workerID int, reason string) {
 	r.promRxDrops.WithLabelValues(strconv.Itoa(workerID), iface, reason).Inc()
 }
@@ -723,7 +723,7 @@ func (r *Recorder) coalesceOptions(iface string, workerID int, reason string) *c
 
 // TeeFailed records datagrams a loopback tee could not deliver. kind is "retry"
 // (the co-located retry cache) or "mirror" (the co-located listener). The tee is
-// best-effort by contract — a failure never touches real egress — so this counter
+// best-effort by contract (a failure never touches real egress) so this counter
 // is the ONLY evidence that the co-located cache is quietly incomplete.
 func (r *Recorder) TeeFailed(kind string, n int64) {
 	if n <= 0 {
@@ -743,7 +743,7 @@ func (r *Recorder) ControlFrameForwarded(ctrlGroup string) {
 }
 
 // IngressDeduped records a frame suppressed by the ingress TxID dedup gate.
-// frameType is one of "brc124", "brc131", "brc132", "brc134" — matching the
+// frameType is one of "brc124", "brc131", "brc132", "brc134": matching the
 // frame-version namespace used by other metrics. iface may be empty when the
 // dropping worker has no resolved interface yet.
 func (r *Recorder) IngressDeduped(iface string, workerID int, frameType string) {
@@ -803,7 +803,7 @@ func (r *Recorder) IngressMetered(class IngressFrameClass, privileged bool, size
 
 // PrivilegedFrameRejected records a privileged control-plane frame dropped
 // because it arrived on a transaction-only ingress socket. frameType is one
-// of "brc131", "brc133", "brc132" — block announce, coinbase, subtree data.
+// of "brc131", "brc133", "brc132": block announce, coinbase, subtree data.
 // Only miner-tier ingress sockets accept these frame classes.
 func (r *Recorder) PrivilegedFrameRejected(frameType string) {
 	r.privilegedRejected.Add(context.Background(), 1, metric.WithAttributes(
@@ -812,7 +812,7 @@ func (r *Recorder) PrivilegedFrameRejected(frameType string) {
 }
 
 // BlockPoWRejected records a BRC-131 block announce dropped by the proof-of-work
-// gate — its header failed PoW or claimed a difficulty below the configured floor.
+// gate, its header failed PoW or claimed a difficulty below the configured floor.
 func (r *Recorder) BlockPoWRejected() {
 	r.blockPoWRejected.Add(context.Background(), 1)
 }

@@ -1,15 +1,15 @@
 // BRC-148 BEEF object plane ingress: submission-record admission and the
 // FrameVer 0x09 process path.
 //
-// BEEF is an open ingress class (bounded, election-scoped amplification —
+// BEEF is an open ingress class (bounded, election-scoped amplification:
 // one record is one frame at any topic count), so records and framed 0x09
 // input are admitted on the public tx port as well as the optional dedicated
 // lane. The forwarder carries one submission record as ONE frame whose
 // payload is the record verbatim (every name reaches the subscriber) and
-// whose DeliverCount says how many leading names are deliverable — 1 on the
-// open path, the policy's cap on an authenticated path — claims ingress
+// whose DeliverCount says how many leading names are deliverable: 1 on the
+// open path, the policy's cap on an authenticated path: claims ingress
 // dedup per (ContentID, TopicID) pair, and stamps HashKey/SeqNum with the
-// domain-tagged group index and a ZERO 32-byte ingredient — the spec
+// domain-tagged group index and a ZERO 32-byte ingredient, the spec
 // excludes TopicID from the flow key so retransmission state stays bounded
 // by groups × sources, independent of topic count.
 
@@ -30,7 +30,7 @@ import (
 )
 
 // beefZeroIngredient is the zeroed 32-byte HashKey/flow-key ingredient for
-// BEEF flows (BRC-148 §Frame carriage: TopicID is excluded — flows are per
+// BEEF flows (BRC-148 §Frame carriage: TopicID is excluded, flows are per
 // (sender, group)).
 var beefZeroIngredient [32]byte
 
@@ -65,7 +65,7 @@ func beefClaimKey(contentID, topicID [32]byte) [32]byte {
 // count; what differs per path is how many of its leading names are
 // DELIVERABLE (matched by delivery edges) rather than labels the subscriber
 // merely receives. The OSS default (nil policy) delivers the first topic
-// only — the open ingress has no identity to hang more on, and one
+// only, the open ingress has no identity to hang more on, and one
 // deliverable topic per record is what keeps the open path free of
 // amplification. A downstream build installs a policy that decides per
 // SOURCE (e.g. consumer-tunnel STE ranges) up to its cap.
@@ -76,7 +76,7 @@ type BEEFSubmitPolicy interface {
 	DeliverCount(src net.IP, n int) int
 	// MaxObjectBytes returns a per-source object bound overriding the operator's
 	// open-ingress bound (0 = no override). Authenticated sources may carry a
-	// larger allowance than the open path — identity makes abuse accountable
+	// larger allowance than the open path: identity makes abuse accountable
 	// (roadmap D9). It may only RAISE the bound: the caller keeps the stricter
 	// of the two, so a policy can never widen past the configured ceiling by
 	// returning something absurd.
@@ -89,7 +89,7 @@ func (fw *Forwarder) SetBEEFSubmitPolicy(p BEEFSubmitPolicy) { fw.beefPolicy = p
 
 // beefObjectBoundFor resolves the object bound for one submitter: the policy's
 // per-source allowance when it EXCEEDS the operator's open bound, else the open
-// bound. Never returns less than configured — a policy cannot tighten below the
+// bound. Never returns less than configured, a policy cannot tighten below the
 // operator's floor, only lift an authenticated source above it.
 func (fw *Forwarder) beefObjectBoundFor(src net.Addr) int {
 	base := fw.beefMaxObject

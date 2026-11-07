@@ -179,7 +179,7 @@ func TestProcessV2_DistinctSubtrees_IndependentFlows(t *testing.T) {
 		t.Errorf("subtree A: HashKey changed between frames (%x != %x)", hkA1, hkA2)
 	}
 	if hkA1 == hkB1 {
-		t.Errorf("subtree A and B share HashKey %x — flows are not isolated", hkA1)
+		t.Errorf("subtree A and B share HashKey %x: flows are not isolated", hkA1)
 	}
 	if seqA1 != 1 {
 		t.Errorf("subtree A frame 1: SeqNum = %d, want 1", seqA1)
@@ -224,7 +224,7 @@ func TestProcessV2FrameForwardedVerbatim(t *testing.T) {
 	conn, _ := openLoopbackUDP(t)
 	fw := makeForwarder()
 	raw := buildV2Frame(t, 0xAB, 999, nil)
-	// WriteTo to multicast dst will fail on loopback — that's fine, no panic.
+	// WriteTo to multicast dst will fail on loopback: that's fine, no panic.
 	fw.Process(makeEgress(t, fw, conn), raw, fakeAddr{}, 0)
 }
 
@@ -233,7 +233,7 @@ func TestProcessV2FrameForwardedVerbatim(t *testing.T) {
 func TestProcessInvalidFrame(t *testing.T) {
 	fw := makeForwarder()
 	conn, _ := openLoopbackUDP(t)
-	// Truncated buffer — must not panic.
+	// Truncated buffer: must not panic.
 	fw.Process(makeEgress(t, fw, conn), []byte{0x00, 0x01}, fakeAddr{}, 0)
 }
 
@@ -312,7 +312,7 @@ func TestOpenTargetsProbe(t *testing.T) {
 	CloseTargets(targets, slog.Default())
 }
 
-// ── ProcessAnchor — BRC-134 ──────────────────────────────────────────────────
+// ── ProcessAnchor: BRC-134 ──────────────────────────────────────────────────
 
 // buildAnchorFrame builds a minimal BRC-134 anchor transaction frame. It encodes
 // using frame.Encode (FrameVerV2 layout) then patches the version byte to 0x06.
@@ -415,7 +415,7 @@ func TestProcessAnchor_NilSrc_SkipsStamping(t *testing.T) {
 	raw := buildAnchorFrame(t, 0x55, 0, nil) // SeqNum=0 means unstamped
 	fw.ProcessAnchor(nil, raw, nil, 0)
 
-	// With nil src the proxy does not stamp — HashKey and SeqNum remain 0.
+	// With nil src the proxy does not stamp: HashKey and SeqNum remain 0.
 	hk := binary.BigEndian.Uint64(raw[40:48])
 	seq := binary.BigEndian.Uint64(raw[48:56])
 	if hk != 0 {
@@ -430,7 +430,7 @@ func TestProcessAnchor_DecodeError_Drops(t *testing.T) {
 	fw := makeForwarder()
 	src := &net.UDPAddr{IP: net.ParseIP("::1"), Port: 1}
 
-	// Bad magic — should be silently dropped, not panic.
+	// Bad magic: should be silently dropped, not panic.
 	bad := make([]byte, frame.HeaderSize)
 	bad[6] = frame.FrameVerV6
 	fw.ProcessAnchor(nil, bad, src, 0)
@@ -583,7 +583,7 @@ func TestProbeEgressSocketClosedConn(t *testing.T) {
 func TestForwarder_Bridging_DualEmitOnDistinctIndices(t *testing.T) {
 	// Active SB=8, Successor SB=9. A TxID with the 9th bit = 1 gives
 	// active_idx = top-8 bits and successor_idx = top-9 bits, which
-	// differ — the forwarder must enqueue TWO datagrams per target.
+	// differ, the forwarder must enqueue TWO datagrams per target.
 	fw := makeForwarder() // SB=8
 	successor := shard.New(0xFF05, shard.DefaultGroupID, 9)
 	fw.SetBridging(&BridgingEngine{Secondary: successor})

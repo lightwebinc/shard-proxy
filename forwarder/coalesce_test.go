@@ -149,7 +149,7 @@ func TestCoalesce_ExcludedWhenBatchCapOne(t *testing.T) {
 }
 
 // A relay (the spine) receiving an already-coalesced bundle must re-emit it
-// verbatim to the bundle's group — not drop it as a decode error, not
+// verbatim to the bundle's group, not drop it as a decode error, not
 // re-coalesce, not re-stamp. Dispatch is called with src=nil (the spine
 // re-emit), and coalescing is OFF on the relay (it forwards origin bundles).
 func TestProcessBundle_RelaysVerbatim(t *testing.T) {

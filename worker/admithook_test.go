@@ -38,7 +38,7 @@ func TestAdmitHook_BareTCPStream(t *testing.T) {
 	}
 }
 
-// No hook installed must behave exactly as before — the lane still admits, and
+// No hook installed must behave exactly as before, the lane still admits, and
 // nothing panics on the nil func.
 func TestAdmitHook_NilIsInert(t *testing.T) {
 	if sunk := runBareConn(t, true, append(bareEFTx(), bareEFTx()...)); len(sunk) != 2 {

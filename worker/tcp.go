@@ -1,9 +1,9 @@
-// Package worker — tcp.go provides TCPIngress: a TCP listener that accepts
+// Package worker: tcp.go provides TCPIngress: a TCP listener that accepts
 // reliable frame delivery connections and feeds them into the shared Forwarder.
 //
 // # Protocol
 //
-// A connection carries ONE of three grammars, detected from its first bytes —
+// A connection carries ONE of three grammars, detected from its first bytes:
 // the TCP mirror of the UDP magic-detect unification (3-way per BRC-148):
 //
 //   - FRAMED: leads with the BSV network magic. A stream of BRC-12, BRC-124,
@@ -17,9 +17,9 @@
 //   - BARE: anything else. A stream of bare transactions (BRC-30 EF
 //     submissions; BRC-12 raw only when EF-native is off), one after another,
 //     self-delimiting by transaction structure (objfmt.ClassTx). Each is
-//     admitted through the shared bare path — TxSize-validated, EF-gated,
+//     admitted through the shared bare path: TxSize-validated, EF-gated,
 //     reframed to an unstamped BRC-124/128 frame, stamped from the observed
-//     source — exactly as a bare UDP submission.
+//     source: exactly as a bare UDP submission.
 //
 // The connection commits to its grammar for its lifetime.
 //
@@ -61,7 +61,7 @@ const maxEgressPool = 8
 
 // tcpBatcher amortizes egress flushes across the frames a connection already
 // has buffered. The old per-frame flush took the (shared) egress socket's
-// write lock — and issued the tee + mirror sendmmsg — at the full frame rate,
+// write lock (and issued the tee + mirror sendmmsg) at the full frame rate,
 // which measured as an idle-CPU ~7-9k pps cap: every connection convoyed on
 // one fd's write lock, whose holder parks in the netpoller under NIC-queue
 // backpressure. Batching cuts the lock-acquisition (and tee/mirror syscall)
@@ -90,7 +90,7 @@ func (b *tcpBatcher) flush() {
 
 // flushingReader drains the connection's pending egress before every
 // underlying (kernel) read. bufio calls it only when its buffer cannot
-// satisfy the current need — exactly the moments the goroutine may block —
+// satisfy the current need: exactly the moments the goroutine may block:
 // so the flush-before-blocking-read guarantee holds for every grammar
 // (framed, bare, BEEF) through this single funnel: no frame ever sits
 // enqueued-but-unsent across a header, payload, or objfmt read that has to
@@ -104,7 +104,7 @@ func (b *tcpBatcher) flush() {
 // sustained load the read returns immediately (no timeout) and the batch fills
 // to maxTCPBatch instead. The in-progress frame (if the buffer emptied
 // mid-frame) is not yet in the batch, so flushing on a linger timeout never
-// strands it — the blocking retry completes it.
+// strands it, the blocking retry completes it.
 type flushingReader struct {
 	conn   net.Conn
 	b      *tcpBatcher
@@ -141,7 +141,7 @@ type TCPIngress struct {
 	viaFlush func() int
 	// retryTee mirrors egressed DATA datagrams to a co-located retry cache.
 	// Each ingress path builds its OWN Egress, so the tee must be enabled on
-	// every one of them — a tee wired only into the UDP worker silently misses
+	// every one of them, a tee wired only into the UDP worker silently misses
 	// everything submitted over this path.
 	retryTee string
 	// localMirror mirrors egressed DATA datagrams to the co-located LISTENER's
@@ -152,7 +152,7 @@ type TCPIngress struct {
 	// wire, at the SAME point the UDP worker loop accounts for a received
 	// datagram: after the read, before DispatchClass routes (or drops) it. A
 	// downstream build uses it for per-submitter admitted-frame/byte counters,
-	// which would otherwise miss the TCP lanes entirely — and TCP is the
+	// which would otherwise miss the TCP lanes entirely, and TCP is the
 	// supported submission transport, so an ingress-side attribution metric
 	// wired only into the UDP loop reads zero on a real fabric. nil = no hook,
 	// and the call sites cost one nil check.
@@ -160,7 +160,7 @@ type TCPIngress struct {
 	// connAdmit is admit's per-connection form: it also receives the LOCAL
 	// address the submitter dialed. A downstream build attributes admission by
 	// destination address (one /128 per submitter), which the wire never
-	// carries — only the accepted socket knows it. nil = no hook.
+	// carries, only the accepted socket knows it. nil = no hook.
 	connAdmit ConnAdmitFunc
 	// coalesceLinger, when >0 AND coalescing is armed on a connection, is the
 	// bounded window a connection accumulates same-flow frames before flushing,
@@ -183,18 +183,18 @@ func (ti *TCPIngress) SetLocalMirror(addr string) { ti.localMirror = addr }
 
 // AdmitFunc observes one submission admitted at an ingress socket: frames is
 // what it counts as on the fabric (1 for every grammar this package reads off a
-// stream — a framed frame, a bare transaction, a control extension, a BEEF
+// stream, a framed frame, a bare transaction, a control extension, a BEEF
 // record) and bytes is what was read for it. It is called on the connection
 // goroutine, so an implementation must be cheap and non-blocking; a counter
 // increment is the intended use.
 type AdmitFunc func(frames, bytes int)
 
 // SetAdmitHook installs fn as this listener's admission observer. Call before
-// [Run]. Attribution only — the hook cannot reject, and nothing downstream reads
+// [Run]. Attribution only, the hook cannot reject, and nothing downstream reads
 // what it records.
 func (ti *TCPIngress) SetAdmitHook(fn AdmitFunc) { ti.admit = fn }
 
-// ConnAdmitFunc is [AdmitFunc] with the accepted socket's LOCAL address — the
+// ConnAdmitFunc is [AdmitFunc] with the accepted socket's LOCAL address, the
 // destination the submitter dialed. Same contract: cheap, non-blocking,
 // attribution only.
 type ConnAdmitFunc func(local net.Addr, frames, bytes int)
@@ -259,7 +259,7 @@ func (ti *TCPIngress) flushEgr(egr *forwarder.Egress) {
 	// egress flush. No-op unless -coalesce is on AND this Egress has a coal
 	// buffer (batchHint>1). This is what makes coalescing SAFE on the reliable
 	// TCP lane: the old per-frame path never called FlushCoalesced (members
-	// stranded — the documented loss hazard), but the batched cadence funnels
+	// stranded, the documented loss hazard), but the batched cadence funnels
 	// EVERY flush path (batcher, flushingReader-before-blocking-read, tail
 	// defer) through here, so no member is ever left un-bundled across a read
 	// or on close. Bundles cut the fabric fan-out + GRE-encap packet rate ~R×,
@@ -276,7 +276,7 @@ func (ti *TCPIngress) flushEgr(egr *forwarder.Egress) {
 }
 
 // Run starts the TCP accept loop on listenAddr:listenPort. The listener is
-// dual-stack (IPv4 + IPv6) when listenAddr is empty/wildcard — public ingress
+// dual-stack (IPv4 + IPv6) when listenAddr is empty/wildcard: public ingress
 // must admit IPv4 submitters; the fabric behind it stays IPv6. It blocks until
 // done is closed. Each accepted connection is handled in its own goroutine.
 func (ti *TCPIngress) Run(listenAddr string, listenPort int, done <-chan struct{}) error {
@@ -301,7 +301,7 @@ func (ti *TCPIngress) Run(listenAddr string, listenPort int, done <-chan struct{
 	// across them by accept order. Every connection used to alias ONE shared
 	// multicast egress socket; each per-frame WriteBatch then serialized on
 	// that single fd's write lock, and a holder parked in the netpoller under
-	// NIC-queue backpressure convoyed every other connection — measured as a
+	// NIC-queue backpressure convoyed every other connection: measured as a
 	// sender-independent ~7-9k pps cap with idle CPU that WORSENED as
 	// connections were added. P sockets shard the lock domain. A connection
 	// keeps its slot for life, so its own frames stay FIFO on one socket;
@@ -332,14 +332,14 @@ func (ti *TCPIngress) Run(listenAddr string, listenPort int, done <-chan struct{
 	}()
 
 	// Shared tee/mirror sockets, one pair per pool slot. Each accepted
-	// connection used to dial two private loopback sockets — a per-accept
+	// connection used to dial two private loopback sockets, a per-accept
 	// cost that contributed to the measured many-connection collapse. Now a
 	// connection takes only a per-Egress buffer over its slot's shared fd;
 	// the tee/mirror FUNCTION (retry-cache fill, own-node delivery) is
 	// unchanged, frame for frame. Closed after connWG.Wait() (defer LIFO), so
 	// every connection's final flush lands on a live socket.
 	// dialTeeSocks dials one shared socket per pool slot; on any failure it
-	// closes the already-dialed slots and disables the feature (nil return) —
+	// closes the already-dialed slots and disables the feature (nil return):
 	// the tee is an optimisation and must never fail the forward path, but a
 	// partial array would leak the dialed fds.
 	dialTeeSocks := func(addr, what string) []*forwarder.TeeSocket {
@@ -416,7 +416,7 @@ func (ti *TCPIngress) Run(listenAddr string, listenPort int, done <-chan struct{
 			// coalescer (NewEgress gates coal on `fw.coalesce && batchHint>1`).
 			// With -coalesce OFF (fw.coalesce=false) coal stays nil and this is
 			// byte-for-byte the plain batched egress; with it ON, coal is
-			// drained safely via flushEgr->FlushCoalesced on EVERY flush path —
+			// drained safely via flushEgr->FlushCoalesced on EVERY flush path:
 			// the batched cadence is what removes the old TCP+coalescing
 			// member-stranding hazard.
 			// Same-source ordering note: proxy-stamped SeqNums are keyed by
@@ -428,7 +428,7 @@ func (ti *TCPIngress) Run(listenAddr string, listenPort int, done <-chan struct{
 			// This stays well under the listener's NACK hold-off (0-200ms): at
 			// any real rate a 64-frame window drains in <1ms, and a stalled
 			// connection surrenders after ~10ms (flushReliable), so the inversion
-			// never outlasts the hold-off — no spurious repair. A submitter that
+			// never outlasts the hold-off, no spurious repair. A submitter that
 			// needs strict on-wire ordering uses one connection (per-connection
 			// order is always preserved).
 			slot := int(connSeq.Add(1)-1) % poolN
@@ -458,11 +458,11 @@ func (ti *TCPIngress) handleConn(conn net.Conn, egr *forwarder.Egress) {
 	admit := ti.admitFor(conn)
 
 	// Egress flushes are batched by cadence: enqueue per frame, flush when
-	// maxTCPBatch accumulates or — via flushingReader — before any read that
+	// maxTCPBatch accumulates or (via flushingReader) before any read that
 	// would block on the kernel. See tcpBatcher for the rationale.
 	bat := &tcpBatcher{ti: ti, egr: egr}
 	// Linger only when coalescing is actually armed on this connection's Egress
-	// — the plain reliable lane keeps the latency-first eager flush.
+	//, the plain reliable lane keeps the latency-first eager flush.
 	linger := time.Duration(0)
 	if egr != nil && egr.CoalArmed() {
 		linger = ti.coalesceLinger
@@ -551,7 +551,7 @@ func (ti *TCPIngress) handleConn(conn net.Conn, egr *forwarder.Egress) {
 		// 92-byte header can otherwise command a ~4 GiB allocation (payLen is
 		// attacker-declared). The general ceiling matches the object-stream
 		// reader (objfmt.DefaultMaxObject); FrameVer 0x09 additionally honours
-		// the operator's -beef-max-object-bytes, per BRC-149's ingress MUST —
+		// the operator's -beef-max-object-bytes, per BRC-149's ingress MUST:
 		// without this, pre-framing over TCP bypasses the submission bound.
 		if payLen < 0 || payLen > objfmt.DefaultMaxObject {
 			ti.log.Warn("TCP declared payload exceeds stream ceiling; closing",
@@ -596,7 +596,7 @@ func (ti *TCPIngress) handleConn(conn net.Conn, egr *forwarder.Egress) {
 // envelope; delimited by transaction structure via objfmt.ClassTx) and admits
 // each through the shared [forwarder.Forwarder.DispatchClass] bare path:
 // TxSize-validated, EF-gated by the forwarder's require-ef setting, reframed
-// to an unstamped BRC-124/128 frame and stamped from the observed source —
+// to an unstamped BRC-124/128 frame and stamped from the observed source:
 // byte-for-byte the same admission a bare UDP submission gets. A malformed
 // transaction desyncs the stream (there is no recovery boundary), so the
 // connection closes.
@@ -634,7 +634,7 @@ func (ti *TCPIngress) handleBEEFConn(br *bufio.Reader, remote net.Addr, egr *for
 			admit(1, len(rec))
 		}
 		// SubmitBEEF copies the object into fresh per-topic frame buffers, so
-		// the Reader window may be reused on the next iteration — and the
+		// the Reader window may be reused on the next iteration, and the
 		// enqueued per-topic buffers are batch-safe for the same reason.
 		// Liveness: br is backed by the connection's flushingReader, so a
 		// blocking rd.Next() drains the batch first.

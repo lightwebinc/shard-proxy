@@ -60,7 +60,7 @@ jobs:
       - name: Enable IPv6 multicast on loopback
         run: |
           # The ROUTE-TYPE KEYWORD is the whole point. `route add ff00::/8 dev lo
-          # table local` — what this step ran until now — creates a UNICAST entry
+          # table local` (what this step ran until now) creates a UNICAST entry
           # (ff00::/8 dev lo metric 1024) and exits 0, so the step looked healthy
           # while test/run-e2e.sh's `route show table local type multicast` found
           # nothing and refused. The kernel never installs this route for loopback
@@ -68,7 +68,7 @@ jobs:
           # ::1/128), so CI must provision it, correctly.
           #
           # `replace` because it is idempotent; `append` returns EEXIST on a second
-          # run. No `2>/dev/null || true` — masking the failure is exactly how the
+          # run. No `2>/dev/null || true`: masking the failure is exactly how the
           # wrong route type survived here unnoticed.
           sudo ip link set lo multicast on
           sudo ip -6 route replace table local multicast ff00::/8 dev lo \
@@ -82,8 +82,8 @@ jobs:
         run: make test-e2e
 
   # freebsd/amd64 is a real deployment target (the FreeBSD spines/edges) and this
-  # repo carries a GOOS split — worker/reuseport_freebsd.go vs
-  # worker/reuseport_other.go — that NOTHING else in CI compiles. The Dagger
+  # repo carries a GOOS split: worker/reuseport_freebsd.go vs
+  # worker/reuseport_other.go, that NOTHING else in CI compiles. The Dagger
   # pipeline builds linux only, so the BSD half rotted unnoticed until it was
   # found by hand on a live node.
   #

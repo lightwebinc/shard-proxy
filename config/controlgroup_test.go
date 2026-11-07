@@ -16,8 +16,8 @@ func groupAddr(prefix uint16) string {
 // THE DEFECT. BRC-126 §Beacon Scopes and BRC-129 §Source Mode and Address
 // Range both require the 0xFFFD control groups to take the source-specific
 // FF3x prefix under SSM. Every release before this one derived FF05::B:FFFD
-// whatever -source-mode said, so an SSM fabric — which only forwards
-// ff35::/16 and ff3e::/16 — carried beacons on a group outside its own
+// whatever -source-mode said, so an SSM fabric, which only forwards
+// ff35::/16 and ff3e::/16, carried beacons on a group outside its own
 // mroute ranges.
 func TestControlGroupPrefixes_SSMUsesSourceSpecificPrefix(t *testing.T) {
 	for _, tc := range []struct {
@@ -98,7 +98,7 @@ func TestControlGroupPrefixes_DerivedRejectsScopesWithNoSSMGroup(t *testing.T) {
 
 // "both" is the receiver-safe default, so it must never turn a binary
 // upgrade into a startup failure: at a scope with no SSM control group it
-// degrades to the any-source prefix alone — today's behaviour exactly.
+// degrades to the any-source prefix alone: today's behaviour exactly.
 func TestControlGroupPrefixes_BothDegradesWhereNoSSMGroupExists(t *testing.T) {
 	for scope, want := range map[string]uint16{"link": 0xFF02, "org": 0xFF08} {
 		got, err := ControlGroupPrefixes(ControlGroupBoth, "ssm", scope)
@@ -143,7 +143,7 @@ func TestControlGroupPrefixes_MatchesSharedHelper(t *testing.T) {
 
 // A second, separate defect the same helper closes. BRC-127 subtree group
 // announcements sit on control-plane index 0xFFFC, so BRC-129's prefix rule
-// covers them too — but here the SENDER was already conformant
+// covers them too, but here the SENDER was already conformant
 // (shard-proxy emits via its -source-mode-derived prefix), so an FF0x-only
 // join meant no announcement ever arrived on an SSM fabric. Not a flag day:
 // a live mismatch.

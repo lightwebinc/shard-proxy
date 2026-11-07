@@ -1,11 +1,11 @@
-// Package forwarder — egress.go implements the per-worker outbound message
+// Package forwarder: egress.go implements the per-worker outbound message
 // batcher. Each Process*/ForwardControl call enqueues outbound datagrams
 // into an Egress; the worker calls [Egress.Flush] at the end of each receive
 // batch, which drains each target's queue through ipv6.PacketConn.WriteBatch.
 // On Linux that is one sendmmsg per target, amortising the egress syscall cost
 // across the entire receive batch instead of paying it per packet per
 // interface. On every other GOOS x/net's WriteBatch writes a single message per
-// call, so the drain loops until the queue is empty (see writeBatchAll) — same
+// call, so the drain loops until the queue is empty (see writeBatchAll): same
 // bytes on the wire, one syscall per datagram.
 //
 // An Egress is owned by a single worker goroutine and is not safe for
@@ -29,7 +29,7 @@ import (
 
 // Egress queues outbound multicast datagrams for one batch and emits them
 // via WriteBatch (sendmmsg on Linux) on Flush. Append references the caller's
-// payload bytes directly — the bytes must remain valid until the next Flush
+// payload bytes directly, the bytes must remain valid until the next Flush
 // returns. The verbatim forwarding path feeds bytes from a receive batch
 // whose buffers are reused only after Flush; fragment-path payloads come
 // from a per-Egress sync.Pool and are released back at Flush time.
@@ -54,7 +54,7 @@ type batchWriter interface {
 }
 
 // errNoBatchProgress stands in for a WriteBatch that reported neither progress
-// nor an error — nothing to classify, and nothing that a bare re-submit would
+// nor an error: nothing to classify, and nothing that a bare re-submit would
 // change, so the drain loop surrenders instead of spinning.
 var errNoBatchProgress = errors.New("egress: WriteBatch made no progress")
 
@@ -68,12 +68,12 @@ var errNoBatchProgress = errors.New("egress: WriteBatch made no progress")
 // other GOOS it falls back to SendMsg(&ms[0]) and returns 1, so a single call
 // silently writes just the first datagram of the batch and drops the rest on
 // the floor. A caller that treats one WriteBatch as "the batch went out" loses
-// everything after ms[0] on FreeBSD — the whole lossy multicast egress and its
+// everything after ms[0] on FreeBSD, the whole lossy multicast egress and its
 // tees. Looping is the portable contract: on Linux the first call normally
 // takes them all and the loop exits immediately (no extra syscall), on FreeBSD
 // it degrades to one sendmsg per datagram, which is exactly what a correct
 // per-frame egress would have cost there anyway. No runtime.GOOS gate is
-// needed or wanted — a partial WriteBatch is legal on Linux too (short
+// needed or wanted, a partial WriteBatch is legal on Linux too (short
 // sendmmsg), and the same loop covers both.
 //
 // It deliberately does NOT retry: a returned error stops the drain and is
@@ -111,7 +111,7 @@ type Egress struct {
 	// re-submits the unsent remainder of a partial WriteBatch instead of
 	// dropping it. The batched-cadence TCP path can queue up to a whole batch
 	// per flush; without the retry, one ENOBUFS burst would drop the entire
-	// batch where the old per-frame path lost at most one frame — a strict
+	// batch where the old per-frame path lost at most one frame, a strict
 	// reliability regression on the lane whose contract is reliability. The
 	// lossy UDP lane keeps drop-and-count semantics (reliable=false).
 	reliable bool
@@ -137,7 +137,7 @@ type Egress struct {
 	// SSM-joins this node's OWN source (that would install an iif==oif mroute and
 	// storm), so own-source frames are not multicast-received locally; the mirror is
 	// the only path that delivers own-node frames to the co-located listener. It
-	// targets a DEDICATED loopback port the listener binds exclusively — NOT the
+	// targets a DEDICATED loopback port the listener binds exclusively, NOT the
 	// retry cache's port, which the retry endpoint co-binds (unicast demux to a
 	// shared wildcard port is kernel-chosen, not controllable).
 	mirror *retryTee
@@ -146,7 +146,7 @@ type Egress struct {
 	// (IP+Port+Zone) for a data frame in group groupIdx. The multicast
 	// address is a pure function of (mcPrefix, groupID, groupIdx, port) and
 	// the Zone is the fixed target iface, so a frame's destination never
-	// changes for a given (target, group) — even across resharding/bridging
+	// changes for a given (target, group), even across resharding/bridging
 	// (which alter the group *index* a txid maps to, not the address of an
 	// index). Lazily filled on first sight, eliminating a per-packet
 	// per-target net.UDPAddr allocation on the egress hot path. Control
@@ -198,7 +198,7 @@ type msgMeta struct {
 	// It is DELIBERATELY a separate field from ctrlLabel. ctrlLabel is a
 	// METRICS label, and BRC-131 block / BRC-132 subtree / BRC-134 anchor
 	// frames ride the control-group enqueue path purely because they carry an
-	// arbitrary destination address — they are fully stamped, fragmented and
+	// arbitrary destination address: they are fully stamped, fragmented and
 	// NACK-repairable DATA. Deriving teeability from ctrlLabel conflated the
 	// two and silently withheld every one of those frames from the tee: a node
 	// never (S,G)-joins its own source, so the tee is the ONLY path by which it
@@ -206,7 +206,7 @@ type msgMeta struct {
 	// any of its own subtree or block traffic (measured on testnet tn-edge-1:
 	// 482 of 5787 own datagrams teed, cache_size 0, 0 hits / 1107 misses).
 	// Only genuinely unstamped control frames (ForwardControl / BRC-127
-	// SubtreeGroupAnnounce) are non-teeable — the cache would decode_error
+	// SubtreeGroupAnnounce) are non-teeable, the cache would decode_error
 	// those, which is the drop the original gate was reaching for.
 	teeable bool
 }
@@ -239,7 +239,7 @@ func NewEgress(fw *Forwarder, targets []Target, batchHint int, rec *metrics.Reco
 		e.msgs[i] = make([]ipv6.Message, 0, batchHint)
 		// Start the per-group destination cache SMALL and grow on demand (see
 		// enqueue). The old fixed maxGroupCache slab was 64 KiB of zeroed
-		// pointers per target per Egress — trivial for the handful of
+		// pointers per target per Egress: trivial for the handful of
 		// long-lived UDP worker egresses it was built for, but the TCP lane
 		// builds one Egress per accepted connection, and at high connection
 		// counts the per-accept slab churn was a measured contributor to the
@@ -283,7 +283,7 @@ func (e *Egress) EnableRetryTee(addr string, batchHint int) error {
 }
 
 // EnableRetryTeeShared is EnableRetryTee over an already-open shared TeeSocket
-// (one fd serving many per-connection egresses — see TeeSocket). CloseRetryTee
+// (one fd serving many per-connection egresses: see TeeSocket). CloseRetryTee
 // on this Egress leaves the shared socket open; its owner closes it.
 func (e *Egress) EnableRetryTeeShared(s *TeeSocket, batchHint int) {
 	e.tee = newSharedTee(s, batchHint, e.rec, "retry")
@@ -300,7 +300,7 @@ func (e *Egress) CoalArmed() bool { return e.coal != nil }
 
 // SetReliable marks this Egress as belonging to the reliable (TCP) submission
 // lane: Flush re-submits the unsent remainder of a partial WriteBatch instead
-// of dropping it (bounded — see Flush). Call before the first Enqueue.
+// of dropping it (bounded: see Flush). Call before the first Enqueue.
 func (e *Egress) SetReliable(v bool) { e.reliable = v }
 
 // RetryTeeFailed reports datagrams the tee could not deliver (0 when disabled).
@@ -321,7 +321,7 @@ func (e *Egress) CloseRetryTee() error {
 
 // EnableLocalMirror mirrors egressed DATA datagrams to the co-located listener's
 // dedicated loopback ingest at addr (host:port, normally "[::1]:<mirror-port>", a
-// port the LISTENER binds exclusively — not the retry cache's). This is what
+// port the LISTENER binds exclusively, not the retry cache's). This is what
 // delivers own-node frames to a collapsed edge's own listener, which cannot
 // SSM-join its own source. Independent of EnableRetryTee (different target port).
 func (e *Egress) EnableLocalMirror(addr string, batchHint int) error {
@@ -442,9 +442,9 @@ func (e *Egress) enqueue(raw []byte, dst net.UDPAddr, m msgMeta, pooled *[]byte)
 	// so cache it; control frames carry an arbitrary dst and always build fresh.
 	isData := m.ctrlLabel == ""
 	// Mirror to the co-located cache. Everything the cache can key by
-	// (HashKey, SeqNum) — see msgMeta.teeable, which is what decides this and is
+	// (HashKey, SeqNum): see msgMeta.teeable, which is what decides this and is
 	// NOT the same question as "is this a control frame" for metrics.
-	// This sits in enqueue deliberately — it is the one funnel every frame passes
+	// This sits in enqueue deliberately: it is the one funnel every frame passes
 	// through AFTER SeqNum stamping and AFTER fragmentation, so the cached bytes
 	// are exactly what a NACK will ask for. Teeing any earlier would populate the
 	// cache with frames that do not match the requests it must answer, which is
@@ -495,8 +495,8 @@ func (e *Egress) enqueue(raw []byte, dst net.UDPAddr, m msgMeta, pooled *[]byte)
 	}
 }
 
-// EgressWriteFunc delivers one queued datagram — the BRC frame payload raw to
-// multicast destination dst — for target index target. Returning a non-nil
+// EgressWriteFunc delivers one queued datagram, the BRC frame payload raw to
+// multicast destination dst: for target index target. Returning a non-nil
 // error stops that target's drain and is recorded like a sendmmsg write error.
 type EgressWriteFunc func(target int, raw []byte, dst *net.UDPAddr) error
 
@@ -524,7 +524,7 @@ func (e *Egress) FlushVia(fn EgressWriteFunc) {
 			// bounded budget before surrendering the remainder. The batched
 			// cadence queues up to a whole batch per flush, and via-transports
 			// (e.g. the ingress→spine pipeline client) self-heal by re-dialing
-			// on the next Send — a first-error break here would turn one
+			// on the next Send, a first-error break here would turn one
 			// transient disconnect into a whole-batch-remainder loss where the
 			// old per-frame flush lost at most one frame. Non-reliable lanes
 			// keep the original first-error surrender.
@@ -564,7 +564,7 @@ func (e *Egress) FlushVia(fn EgressWriteFunc) {
 // zero-progress retry loop: ~50 × 200µs ⇒ at most ~10ms of in-line stall per
 // flush before the remainder is surrendered as write_error drops (logged +
 // counted; the retry tee holds the frames, so BRC-126 NACK repair is the
-// backstop). Unbounded blocking is not an option — a wedged NIC queue must
+// backstop). Unbounded blocking is not an option, a wedged NIC queue must
 // not hang the submission lane forever.
 const (
 	reliableRetryBackoff = 200 * time.Microsecond
@@ -573,7 +573,7 @@ const (
 
 // isTransientSendErr reports whether a sendmmsg error is worth retrying:
 // kernel buffer/qdisc backpressure (ENOBUFS), a not-ready socket
-// (EAGAIN/EWOULDBLOCK — normally absorbed by the runtime poller, but surfaced
+// (EAGAIN/EWOULDBLOCK: normally absorbed by the runtime poller, but surfaced
 // on some paths), or an interrupted syscall (EINTR).
 func isTransientSendErr(err error) bool {
 	return errors.Is(err, syscall.ENOBUFS) ||
@@ -588,7 +588,7 @@ func isTransientSendErr(err error) bool {
 // PacketDropped with reason "write_error". Pool buffers are released exactly
 // once each before return.
 //
-// A reliable Egress (SetReliable — the TCP submission lane) re-submits the
+// A reliable Egress (SetReliable, the TCP submission lane) re-submits the
 // unsent remainder of a partial WriteBatch instead of dropping it: the
 // batched-cadence TCP path queues up to a whole batch per flush, and a single
 // ENOBUFS burst would otherwise drop the lot where the old per-frame path

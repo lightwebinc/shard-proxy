@@ -313,7 +313,7 @@ func startTcpdump(vm, iface string) (*tcpdumpProc, error) {
 
 	cmd := exec.Command("lxc", "exec", vm, "--",
 		"tcpdump", "-p", "-i", iface, "-n", "ip6 and udp", "-w", "/tmp/perf-capture.pcap")
-	// Provide a live stdin pipe — without it, lxc exec may kill the container
+	// Provide a live stdin pipe, without it, lxc exec may kill the container
 	// process when it detects /dev/null stdin (EOF).
 	stdinPipe, err := cmd.StdinPipe()
 	if err != nil {
@@ -512,7 +512,7 @@ func sendFramesWorker(ctx context.Context, cfg *config, workerID int, targetPPS 
 
 		// Latency stamp: overwrite the payload head on every Nth frame. The
 		// payload stays opaque to the datapath; latency-sink (or the host-pcap
-		// analyzer) recognizes the magic. Stamps use CLOCK_REALTIME — see
+		// analyzer) recognizes the magic. Stamps use CLOCK_REALTIME: see
 		// cmd/internal/latstamp.
 		if cfg.LatencyStamp && framesSent%int64(cfg.StampEvery) == 0 {
 			latstamp.Put(f.Payload, time.Now().UnixNano(), uint32(stampSeq.Add(1)))
@@ -823,7 +823,7 @@ func generateReport(r *testResults) string {
 					w(" %d |", count)
 					subs = append(subs, recv)
 				} else {
-					w(" — |")
+					w(" - |")
 				}
 				totals[recv] += count
 			}

@@ -1,6 +1,6 @@
-// Package worker — objingress.go provides ObjectIngress: a TCP listener that
+// Package worker: objingress.go provides ObjectIngress: a TCP listener that
 // accepts a single-class stream of BRC-143 subtree or BRC-144 block PUSH frames
-// (header-stripped, self-delimiting by their own counts — see shard-common/
+// (header-stripped, self-delimiting by their own counts: see shard-common/
 // objfmt) and reframes each into its multicast fabric frame for the forwarder.
 //
 // # Why a separate lane per class
@@ -8,7 +8,7 @@
 // Push frames carry no magic and no FrameVer byte, so they cannot be routed on
 // a shared socket the way framed input is: the class is known only from which
 // port the object arrived on. Each class therefore rides its own dedicated,
-// tunnel-bound port (subtree 8726, block 8727 by convention) — a miner submits
+// tunnel-bound port (subtree 8726, block 8727 by convention), a miner submits
 // as a tunnel consumer; the ports are never publicly exposed. This replaces the
 // deprecated privileged multicast miner port.
 //
@@ -17,8 +17,8 @@
 // A subtree can reach ~128 MiB (millions of node hashes), far past any datagram,
 // so objects are read from a byte stream with objfmt.Reader (which splits a
 // single-class stream into whole objects with no outer framing). Each object is
-// reframed with objfmt.MulticastBytes — subtree → BRC-132, block → the BRC-144
-// body carried verbatim in a BRC-131 block-control frame — and dispatched
+// reframed with objfmt.MulticastBytes: subtree → BRC-132, block → the BRC-144
+// body carried verbatim in a BRC-131 block-control frame, and dispatched
 // through the shared forwarder exactly like any privileged frame (it stamps
 // HashKey/SeqNum from the observed source and egresses to the control group).
 package worker
@@ -55,7 +55,7 @@ type ObjectIngress struct {
 	viaFlush  func() int
 	// retryTee mirrors egressed DATA datagrams to a co-located retry cache.
 	// Each ingress path builds its OWN Egress, so the tee must be enabled on
-	// every one of them — a tee wired only into the UDP worker silently misses
+	// every one of them, a tee wired only into the UDP worker silently misses
 	// everything submitted over this path.
 	retryTee string
 	// admit observes each object this lane takes off the wire, at the same
@@ -208,7 +208,7 @@ func (oi *ObjectIngress) Run(listenAddr string, listenPort int, done <-chan stru
 
 // handleConn reads whole push objects from conn and reframes each into the
 // fabric. The connection is closed on EOF, read error, or a malformed object
-// (which desyncs the single-class stream — there is no recovery point).
+// (which desyncs the single-class stream: there is no recovery point).
 func (oi *ObjectIngress) handleConn(conn net.Conn, egr *forwarder.Egress) {
 	defer func() { _ = conn.Close() }()
 	remote := conn.RemoteAddr()

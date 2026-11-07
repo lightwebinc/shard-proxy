@@ -74,8 +74,8 @@ func TestPacketDropped(t *testing.T) {
 func TestPacketForwarded(t *testing.T) {
 	rec := newTestRecorder(t, 1)
 	rec.PacketForwarded("eth0", 0, 42, 512)
-	rec.PacketForwarded("eth0", 0, 42, 256) // same group — exercises cache hit
-	rec.PacketForwarded("eth0", 0, 99, 128) // different group — new cache entry
+	rec.PacketForwarded("eth0", 0, 42, 256) // same group: exercises cache hit
+	rec.PacketForwarded("eth0", 0, 99, 128) // different group: new cache entry
 }
 
 func TestIngressError(t *testing.T) {
@@ -230,7 +230,7 @@ func TestActiveGroupTracking(t *testing.T) {
 	st0 := rec.ifaceState("eth0")
 	st0.addFlow(0, 1, 64)
 	st0.addFlow(0, 2, 64)
-	st0.addFlow(0, 1, 64) // duplicate group — should not bind a new shard
+	st0.addFlow(0, 1, 64) // duplicate group: should not bind a new shard
 	st1 := rec.ifaceState("eth1")
 	st1.addFlow(0, 1, 64)
 
@@ -267,7 +267,7 @@ func TestHandleHealthz(t *testing.T) {
 
 func TestHandleReadyzNotReady(t *testing.T) {
 	rec := newTestRecorder(t, 2)
-	// No workers have called WorkerReady — should be 503.
+	// No workers have called WorkerReady: should be 503.
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	w := httptest.NewRecorder()
 	rec.handleReadyz(w, req)

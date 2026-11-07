@@ -22,7 +22,7 @@ func countEnqueued(egr *Egress) int {
 // dispatchCase is one (frame builder, expected-forward-on-transaction-socket)
 // pair. The frame is built per use, never shared: forwarding stamps HashKey and
 // SeqNum into the buffer in place, so a case reused across subtests would hand
-// the second one an already-stamped frame — which the stamped-ingress gate
+// the second one an already-stamped frame, which the stamped-ingress gate
 // rejects, and which is not the input the subtest means to exercise.
 type dispatchCase struct {
 	name           string

@@ -225,7 +225,7 @@ func TestHandleConnValidFrame(t *testing.T) {
 
 func TestHandleConnEmptyConn(t *testing.T) {
 	dialHandleConn(t, func(_ net.Conn) {
-		// write nothing — immediate EOF in handleConn
+		// write nothing: immediate EOF in handleConn
 	})
 }
 
@@ -237,7 +237,7 @@ func TestHandleConnTruncatedHeader(t *testing.T) {
 
 func TestHandleConnBadMagic(t *testing.T) {
 	hdr := make([]byte, frame.HeaderSize)
-	hdr[0] = 0x00 // bad magic — all zeros
+	hdr[0] = 0x00 // bad magic, all zeros
 	dialHandleConn(t, func(conn net.Conn) {
 		_, _ = conn.Write(hdr)
 	})
@@ -349,7 +349,7 @@ func TestHandleConnV6AnchorFrame_EmptyPayload(t *testing.T) {
 }
 
 func TestHandleConnV6AnchorFrame_TruncatedHeader(t *testing.T) {
-	// Only the first 44 bytes (HeaderSizeLegacy) — missing the 48-byte extension.
+	// Only the first 44 bytes (HeaderSizeLegacy): missing the 48-byte extension.
 	// handleConn must close the connection gracefully without panic.
 	raw := buildV6AnchorTCPFrame(t, 0xEF, nil)
 	dialHandleConn(t, func(conn net.Conn) {

@@ -55,7 +55,7 @@ func captureEnqueued(egr *Egress) (frames [][]byte, dsts []*net.UDPAddr) {
 }
 
 // TestDispatchClass_BEEFOpenClass proves BEEF input (framed V9 and bare
-// submission records) is admitted on every ingress class — BEEF is an open
+// submission records) is admitted on every ingress class: BEEF is an open
 // class, unlike the miner-gated subtree/block lanes.
 func TestDispatchClass_BEEFOpenClass(t *testing.T) {
 	src := &net.UDPAddr{IP: net.ParseIP("::1"), Port: 12345}
@@ -262,7 +262,7 @@ func TestProcessBEEF_PreFramedDeliverCountIsNotThePublishers(t *testing.T) {
 }
 
 // TestProcessBEEF_ZeroIngredientFlow is the D4 spec regression: BEEF flows
-// are per (sender, group) with a ZERO 32-byte HashKey ingredient — two
+// are per (sender, group) with a ZERO 32-byte HashKey ingredient: two
 // topics that co-reside in one group share one flow (equal HashKeys,
 // consecutive SeqNums), and the HashKey matches
 // XXH64(sender ∥ banded groupIdx ∥ zeros) exactly.
@@ -335,7 +335,7 @@ func TestProcessBEEF_PairDedup(t *testing.T) {
 	conn, _ := openLoopbackUDP(t)
 
 	// The same object submitted to two DIFFERENT topics as separate
-	// single-topic records are distinct (ContentID, TopicID) pairs — neither
+	// single-topic records are distinct (ContentID, TopicID) pairs: neither
 	// suppresses the other.
 	egrA := makeEgress(t, fw, conn)
 	fw.SubmitBEEF(egrA, buildBEEFRecordBytes(t, []string{"tm_a"}, beefTestObj), src, 0)
@@ -355,7 +355,7 @@ func TestProcessBEEF_PairDedup(t *testing.T) {
 		t.Fatalf("re-submission of tm_a enqueued %d, want 0 (pair claim held)", got)
 	}
 
-	// Same object to a NEW topic is a fresh pair — never suppressed.
+	// Same object to a NEW topic is a fresh pair, never suppressed.
 	egr3 := makeEgress(t, fw, conn)
 	fw.SubmitBEEF(egr3, buildBEEFRecordBytes(t, []string{"tm_c"}, beefTestObj), src, 0)
 	if got := countEnqueued(egr3); got != 1 {
@@ -441,7 +441,7 @@ func TestProcessBEEF_PreFramedOversizeDropped(t *testing.T) {
 
 	fw.ProcessBEEF(egr, buildBEEFFrameBytes(t, "tm_oversize", big), src, 0)
 	if frames, _ := captureEnqueued(egr); len(frames) != 0 {
-		t.Fatalf("oversize pre-framed V9 forwarded (%d frames) — bound bypassed", len(frames))
+		t.Fatalf("oversize pre-framed V9 forwarded (%d frames): bound bypassed", len(frames))
 	}
 
 	// Same object under the bound passes (the bound, not the path, decides).

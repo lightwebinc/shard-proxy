@@ -9,7 +9,7 @@ import (
 // The site-aggregator stamps every federated sample with the site label set.
 // A metric that carries one of these names itself makes the whole /federate
 // payload invalid ("label name <x> is not unique: invalid sample"), which
-// takes down the scrape for the ENTIRE site, not just the offending series —
+// takes down the scrape for the ENTIRE site, not just the offending series:
 // observed 2026-09-23 when bsp_beef_topics_total shipped a "role" dimension
 // and both spine seams went down minutes after the converge.
 var reservedSiteLabels = []string{"fabric", "geo", "location", "node", "region", "role", "site"}

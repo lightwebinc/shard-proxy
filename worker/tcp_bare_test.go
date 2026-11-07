@@ -82,7 +82,7 @@ func TestBareConn_EFStreamAdmitted(t *testing.T) {
 	}
 	// Same tx → same flow: SeqNum increments across the stream.
 	if s0, s1 := binary.BigEndian.Uint64(sunk[0][48:56]), binary.BigEndian.Uint64(sunk[1][48:56]); s1 != s0+1 {
-		t.Errorf("SeqNums %d,%d — want consecutive", s0, s1)
+		t.Errorf("SeqNums %d,%d: want consecutive", s0, s1)
 	}
 }
 

@@ -82,7 +82,7 @@ func TestVerifyPayloadHash(t *testing.T) {
 		egr := makeEgress(t, fw, conn)
 		fw.Process(egr, buildV2FrameTxID(t, [32]byte{0xAB}, 0, buildBareEF()), src, 0)
 		if got := countEnqueued(egr); got != 1 {
-			t.Errorf("%d queued, want 1 (gate off — mismatch forwarded verbatim)", got)
+			t.Errorf("%d queued, want 1 (gate off: mismatch forwarded verbatim)", got)
 		}
 	})
 
@@ -94,7 +94,7 @@ func TestVerifyPayloadHash(t *testing.T) {
 		raw, _, _ := honestEFFrame(t, 0)
 		fw.Process(egr, raw, src, 0)
 		if got := countEnqueued(egr); got != 1 {
-			t.Errorf("%d queued, want 1 (honest EF frame — id excludes EF extras)", got)
+			t.Errorf("%d queued, want 1 (honest EF frame: id excludes EF extras)", got)
 		}
 	})
 
@@ -224,7 +224,7 @@ func TestVerifyPayloadHash(t *testing.T) {
 // on the proxy at all rather than only on the listener. The ingress dedup
 // claim is keyed on the wire TxID, so a forged frame that reached the claim
 // first would burn the honest transaction's slot and the honest frame would be
-// suppressed here — never reaching a listener, where the equivalent check
+// suppressed here, never reaching a listener, where the equivalent check
 // could no longer help it.
 func TestVerifyPayloadHash_GateRunsBeforeDedupClaim(t *testing.T) {
 	fw := makeForwarder()
@@ -239,7 +239,7 @@ func TestVerifyPayloadHash_GateRunsBeforeDedupClaim(t *testing.T) {
 	honest, tx, id := honestEFFrame(t, 0)
 
 	// Attacker: the honest TxID over a genuinely different transaction (same
-	// shape, different prev-txid — offset 11 is the first prev-txid byte).
+	// shape, different prev-txid: offset 11 is the first prev-txid byte).
 	other := append([]byte(nil), tx...)
 	other[11] = 0x99
 	if otherID, err := objfmt.TxID(other); err != nil || otherID == id {
@@ -251,7 +251,7 @@ func TestVerifyPayloadHash_GateRunsBeforeDedupClaim(t *testing.T) {
 		t.Fatalf("forged frame: %d queued, want 0", got)
 	}
 	if got := d.claimed.Load(); got != 0 {
-		t.Fatalf("forged frame took %d dedup claims, want 0 — the gate must run before the claim", got)
+		t.Fatalf("forged frame took %d dedup claims, want 0, the gate must run before the claim", got)
 	}
 
 	// The honest transaction must still be able to claim its own slot.

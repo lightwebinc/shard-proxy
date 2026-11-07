@@ -13,14 +13,14 @@ func TestForwardControl_PerTargetWrite(t *testing.T) {
 	conn2, _ := openLoopbackUDP(t)
 	egr := makeEgress(t, fw, conn1, conn2)
 
-	// Sending to a multicast address on loopback typically fails; that's fine —
+	// Sending to a multicast address on loopback typically fails; that's fine:
 	// the test merely exercises the per-target loop and address derivation
 	// path without panicking.
 	raw := make([]byte, 64)
 	raw[0] = 0xE3
 	fw.ForwardControl(egr, raw, shard.GroupSubtreeDataAnnounce, 9001)
 	fw.ForwardControl(egr, raw, shard.GroupBeacon, 9001)
-	fw.ForwardControl(egr, raw, shard.GroupIdx(0xF000), 9001) // unknown — exercises default label branch
+	fw.ForwardControl(egr, raw, shard.GroupIdx(0xF000), 9001) // unknown: exercises default label branch
 }
 
 func TestForwardControl_EmptyTargets(t *testing.T) {

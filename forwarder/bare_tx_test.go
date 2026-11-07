@@ -8,7 +8,7 @@ import (
 	"github.com/lightwebinc/shard-common/shard"
 )
 
-// buildBareTx is a minimal 1-in/1-out standard (BRC-12 raw) transaction —
+// buildBareTx is a minimal 1-in/1-out standard (BRC-12 raw) transaction:
 // no Extended Format marker.
 func buildBareTx() []byte {
 	b := []byte{0x01, 0, 0, 0, 0x01} // version + input count
@@ -65,7 +65,7 @@ func TestDispatchBareTx_EFOnly(t *testing.T) {
 		egr := makeEgress(t, fw, conn)
 		fw.DispatchClass(egr, buildBareTx(), src, 0, IngressTransaction)
 		if got := countEnqueued(egr); got != 0 {
-			t.Errorf("bare raw: %d queued, want 0 (rejected — EF-native ingress)", got)
+			t.Errorf("bare raw: %d queued, want 0 (rejected, EF-native ingress)", got)
 		}
 	})
 
@@ -75,7 +75,7 @@ func TestDispatchBareTx_EFOnly(t *testing.T) {
 		egr := makeEgress(t, fw, conn)
 		fw.DispatchClass(egr, buildBareTx(), src, 0, IngressTransaction)
 		if got := countEnqueued(egr); got != 1 {
-			t.Errorf("bare raw (default): %d queued, want 1 (admitted — EF not required)", got)
+			t.Errorf("bare raw (default): %d queued, want 1 (admitted, EF not required)", got)
 		}
 	})
 
@@ -106,7 +106,7 @@ func BenchmarkProcessSubmitEF(b *testing.B) {
 	defer func() { _ = conn.Close() }()
 	egr := NewEgress(fw, []Target{{Iface: &net.Interface{Index: 1, Name: "lo"}, Conn: conn}}, 32, nil)
 
-	// Unstamped (SeqNum 0) EF frame — the submission path the gate guards.
+	// Unstamped (SeqNum 0) EF frame, the submission path the gate guards.
 	f := &frame.Frame{SeqNum: 0, Payload: buildBareEF()}
 	f.TxID[0] = 0x42
 	buf := make([]byte, frame.HeaderSize+len(f.Payload))

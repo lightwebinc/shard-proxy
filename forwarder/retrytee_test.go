@@ -12,7 +12,7 @@ import (
 // the local cache. Byte-identical matters: the retry endpoint keys its cache on
 // (HashKey, SeqNum) read from the frame at fixed offsets, so anything other than
 // the exact egressed bytes caches a frame that cannot answer the NACK that asks
-// for it — worse than caching nothing.
+// for it: worse than caching nothing.
 func TestRetryTeeMirrorsDataFrames(t *testing.T) {
 	sink, sinkAddr := openLoopbackUDP(t)
 	// The retry endpoint binds the WILDCARD [::]:port and performs no multicast
@@ -50,7 +50,7 @@ func TestRetryTeeMirrorsDataFrames(t *testing.T) {
 	}
 	for i := range want {
 		if string(got[i]) != string(want[i]) {
-			t.Errorf("tee copy %d = %q, want %q — a NACK for this frame would be answered "+
+			t.Errorf("tee copy %d = %q, want %q, a NACK for this frame would be answered "+
 				"with the wrong bytes", i, got[i], want[i])
 		}
 	}
@@ -71,7 +71,7 @@ func TestRetryTeeFailureDoesNotBreakEgress(t *testing.T) {
 	if err := egr.EnableRetryTee(net.JoinHostPort("::1", itoaPort(sinkAddr.Port)), 8); err != nil {
 		t.Fatalf("EnableRetryTee: %v", err)
 	}
-	// Close the tee socket underneath it — every subsequent write fails.
+	// Close the tee socket underneath it: every subsequent write fails.
 	_ = egr.CloseRetryTee()
 
 	dst := net.UDPAddr{IP: net.ParseIP("ff05::1"), Port: 9001}
@@ -144,7 +144,7 @@ func itoaPort(p int) string {
 //
 // Regression: teeability used to be derived from the metrics ctrlLabel, so all
 // three were silently withheld. Because a node never (S,G)-joins its own source,
-// the tee is the ONLY path by which it can cache its own emissions — the gate left
+// the tee is the ONLY path by which it can cache its own emissions, the gate left
 // every submit edge unable to repair any of its own subtree or block traffic.
 // Flip the call below back to EnqueueControl and this test fails.
 func TestRetryTeeMirrorsStampedControlGroupFrames(t *testing.T) {
@@ -182,7 +182,7 @@ func TestRetryTeeMirrorsStampedControlGroupFrames(t *testing.T) {
 	n := copy(*bufPtr, want[3])
 	egr.EnqueueCacheablePooled((*bufPtr)[:n], dst, "subtree_data", 0, bufPtr)
 
-	// An UNSTAMPED BRC-127 control frame still must NOT be teed — the cache would
+	// An UNSTAMPED BRC-127 control frame still must NOT be teed, the cache would
 	// count it a decode_error. This is the only thing the old gate got right.
 	egr.EnqueueControl([]byte("brc127-subtree-group-announce-xx"), dst, "subtree_group_announce", 0)
 
@@ -190,7 +190,7 @@ func TestRetryTeeMirrorsStampedControlGroupFrames(t *testing.T) {
 
 	got := drainSink(t, sink, len(want))
 	if len(got) != len(want) {
-		t.Fatalf("tee delivered %d datagrams, want %d — stamped control-group frames "+
+		t.Fatalf("tee delivered %d datagrams, want %d: stamped control-group frames "+
 			"must be teed and the unstamped BRC-127 frame must not", len(got), len(want))
 	}
 	for i := range want {

@@ -22,7 +22,7 @@ const DefaultCoalesceMaxBytes = 1500
 // Within-batch model: members reference payload slices that live in the worker's
 // reused receive buffers and are valid only until the next ReadBatch, so the
 // buffer MUST be flushed (members encoded into owned bundle datagrams) before
-// the batch's Egress.Flush returns. The buffer holds no cross-batch state — the
+// the batch's Egress.Flush returns. The buffer holds no cross-batch state, the
 // per-flow monotonic SeqNum lives in the Forwarder's striped counter map and is
 // drawn at flush via nextSeq, so a flow's bundles and any individual frames
 // share one contiguous sequence space.
@@ -69,9 +69,9 @@ func (c *coalBuffer) add(ip [16]byte, group uint32, subtree, txid [32]byte, payl
 func (c *coalBuffer) reset() { c.buckets = c.buckets[:0] }
 
 // ProcessBundle re-emits an already-coalesced BRC-142 bundle datagram verbatim
-// to its shard group. A bundle is a complete, self-describing multicast frame —
+// to its shard group. A bundle is a complete, self-describing multicast frame:
 // its HashKey/SeqNum were stamped by the coalescing origin (a collapsed or
-// ingress proxy) — so a relay forwards it UNCHANGED: not re-coalesced, not
+// ingress proxy), so a relay forwards it UNCHANGED: not re-coalesced, not
 // re-stamped, not split. This is the regional spine's path (it collects
 // ingress-coalesced bundles over the unicast pipeline and re-emits each as one
 // multicast datagram), so the upstream packing turns into one egress datagram /
@@ -96,7 +96,7 @@ func (fw *Forwarder) ProcessBundle(egr *Egress, raw []byte, workerID int) {
 	// Cheap structural validation of an untrusted relayed datagram before a
 	// verbatim re-emit: the BSV magic and a self-consistent declared payload
 	// length (raw[62:66]). Members are opaque pass-through bytes (never indexed
-	// here), so this is the whole integrity check — it stops a corrupt header
+	// here), so this is the whole integrity check: it stops a corrupt header
 	// (e.g. a garbage GroupIdx) from silently mis-routing the bundle to the wrong
 	// group, and gives upstream corruption an observable counter.
 	if binary.BigEndian.Uint32(raw[0:4]) != frame.MagicBSV ||
@@ -124,7 +124,7 @@ func (fw *Forwarder) ProcessBundle(egr *Egress, raw []byte, workerID int) {
 //
 // Each bundle's HashKey/SeqNum is drawn from the same per-flow counter
 // (nextSeq) that stamps individual frames, so a flow's bundles interleave
-// contiguously with any individual frames it also emits — a listener gap-tracks
+// contiguously with any individual frames it also emits, a listener gap-tracks
 // the (group, subtree, HashKey) flow uniformly regardless of frame version.
 func (fw *Forwarder) FlushCoalesced(egr *Egress, workerID int) {
 	if egr == nil || egr.coal == nil || len(egr.coal.buckets) == 0 {

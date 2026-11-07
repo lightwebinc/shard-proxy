@@ -9,7 +9,7 @@ echo "pre-commit: gofmt..."
 # Format and re-stage ONLY the Go files already staged for this commit.
 # A bare `gofmt -w . && git add -u` stages every tracked modification in the
 # working tree, so an unrelated file someone else is mid-edit on gets swept
-# into this commit — selective `git add` cannot defend against it.
+# into this commit: selective `git add` cannot defend against it.
 staged_go="$(git diff --cached --name-only --diff-filter=ACM -- '*.go')"
 if [ -n "$staged_go" ]; then
   printf '%s\n' "$staged_go" | xargs -r gofmt -w --

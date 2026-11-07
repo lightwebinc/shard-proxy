@@ -9,7 +9,7 @@ import (
 
 // TestNextSeq_ConcurrentSameFlow_MonotonicNoGaps verifies that concurrent
 // invocations of nextSeq for the same (sender, group, subtree) flow produce
-// each integer in [1, N] exactly once — i.e. the atomic counter never
+// each integer in [1, N] exactly once, i.e. the atomic counter never
 // double-issues or skips, even though many goroutines race through the
 // stripe lock and the post-lock atomic increment.
 func TestNextSeq_ConcurrentSameFlow_MonotonicNoGaps(t *testing.T) {
@@ -94,7 +94,7 @@ func TestNextSeq_ConcurrentDistinctFlows_IndependentCounters(t *testing.T) {
 }
 
 // TestStripeIndex_NotAllSameBucket sanity-checks that distinct IPs map to a
-// variety of stripes — if every IP landed in the same bucket the lock
+// variety of stripes, if every IP landed in the same bucket the lock
 // striping would be ineffective. We require at least 16 distinct stripes
 // across 256 sender IPs.
 func TestStripeIndex_NotAllSameBucket(t *testing.T) {

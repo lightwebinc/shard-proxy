@@ -12,7 +12,7 @@ import (
 
 // oneShotWriter models golang.org/x/net/ipv6's NON-Linux WriteBatch exactly:
 // it does SendMsg(&ms[0]) and returns (1, nil), never touching ms[1:]. That is
-// the real behaviour on FreeBSD (and on every GOOS but Linux) — a caller that
+// the real behaviour on FreeBSD (and on every GOOS but Linux), a caller that
 // treats one WriteBatch call as "the whole batch went out" silently drops every
 // datagram after the first of each flush.
 type oneShotWriter struct {
@@ -33,7 +33,7 @@ func (w *oneShotWriter) WriteBatch(ms []ipv6.Message, _ int) (int, error) {
 	return 1, nil
 }
 
-// stalledWriter reports neither progress nor an error — the pathological
+// stalledWriter reports neither progress nor an error, the pathological
 // (0, nil) result. The drain must surrender, not spin forever.
 type stalledWriter struct{ calls int }
 
@@ -54,7 +54,7 @@ func portableEgress(t *testing.T, w batchWriter, batchHint int) *Egress {
 
 // The LOSSY multicast egress must put every queued datagram on the wire even
 // when the platform's WriteBatch accepts one message per call. Without the
-// drain loop this delivers 1 of 8 — the FreeBSD edge blocker: a whole receive
+// drain loop this delivers 1 of 8, the FreeBSD edge blocker: a whole receive
 // batch collapses to its first frame, with no error, no metric and no log.
 func TestLossyFlushDrainsWholeBatchOneMessageAtATime(t *testing.T) {
 	w := &oneShotWriter{}
@@ -68,7 +68,7 @@ func TestLossyFlushDrainsWholeBatchOneMessageAtATime(t *testing.T) {
 	egr.Flush()
 
 	if len(w.sent) != len(want) {
-		t.Fatalf("lossy flush wrote %d of %d datagrams (%v) — the batch remainder "+
+		t.Fatalf("lossy flush wrote %d of %d datagrams (%v), the batch remainder "+
 			"was silently dropped", len(w.sent), len(want), w.sent)
 	}
 	for i := range want {
@@ -104,7 +104,7 @@ func TestRetryTeeDrainsWholeBatchOneMessageAtATime(t *testing.T) {
 	egr.tee.wait()
 
 	if len(tw.sent) != len(want) {
-		t.Fatalf("tee wrote %d of %d copies (%v) — the cache would MISS for the rest",
+		t.Fatalf("tee wrote %d of %d copies (%v), the cache would MISS for the rest",
 			len(tw.sent), len(want), tw.sent)
 	}
 	if f := egr.RetryTeeFailed(); f != 0 {
@@ -114,7 +114,7 @@ func TestRetryTeeDrainsWholeBatchOneMessageAtATime(t *testing.T) {
 }
 
 // The local mirror (own-node delivery to a collapsed edge's listener) is the
-// same retryTee type on a different port and must drain identically — without
+// same retryTee type on a different port and must drain identically, without
 // it a FreeBSD collapsed edge delivers one own-source frame per batch to its
 // own listener.
 func TestLocalMirrorDrainsWholeBatchOneMessageAtATime(t *testing.T) {
@@ -135,7 +135,7 @@ func TestLocalMirrorDrainsWholeBatchOneMessageAtATime(t *testing.T) {
 	egr.mirror.wait()
 
 	if len(mw.sent) != 6 {
-		t.Fatalf("mirror wrote %d of 6 copies — own-source frames never reach the "+
+		t.Fatalf("mirror wrote %d of 6 copies: own-source frames never reach the "+
 			"co-located listener", len(mw.sent))
 	}
 	if f := egr.LocalMirrorFailed(); f != 0 {
@@ -168,7 +168,7 @@ func TestFlushViaTeeDrainsWholeBatch(t *testing.T) {
 }
 
 // The reliable (TCP submission) lane must also drain a one-message-per-call
-// writer — and must do it WITHOUT spending its retry budget, since an
+// writer, and must do it WITHOUT spending its retry budget, since an
 // error-free partial write is not backpressure.
 func TestReliableFlushDrainsOneMessageAtATime(t *testing.T) {
 	w := &oneShotWriter{}
@@ -181,7 +181,7 @@ func TestReliableFlushDrainsOneMessageAtATime(t *testing.T) {
 		t.Fatalf("reliable flush wrote %d of 12 datagrams", len(w.sent))
 	}
 	if w.calls != 12 {
-		t.Fatalf("WriteBatch called %d times for 12 datagrams — the drain should cost "+
+		t.Fatalf("WriteBatch called %d times for 12 datagrams, the drain should cost "+
 			"exactly one call per accepted message, with no retry backoff", w.calls)
 	}
 }

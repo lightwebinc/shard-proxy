@@ -1,5 +1,5 @@
 # Scheduled vulnerability scan. CI already runs govulncheck on every push, but a
-# repo nobody commits to never re-scans — and an advisory published against a
+# repo nobody commits to never re-scans, and an advisory published against a
 # dependency does not wait for a commit, so detection latency on a quiet repo is
 # unbounded. This runs the SAME Dagger `vuln` stage on a clock against main.
 # A red run here means a new advisory hit a dependency; fix by bumping it.
@@ -9,7 +9,7 @@ on:
   schedule:
     # Tuesdays and Fridays 04:00 UTC, tracking Renovate's Tue+Fri wave so a
     # finding has a fix PR behind it the same afternoon rather than waiting out
-    # the rest of the week. CodeQL still holds Mondays 03:00 — keep them apart so
+    # the rest of the week. CodeQL still holds Mondays 03:00, keep them apart so
     # a failure is unambiguous about which scanner found what.
     - cron: "0 4 * * 2,5"
   workflow_dispatch:

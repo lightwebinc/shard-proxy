@@ -11,7 +11,7 @@ import (
 // BenchmarkProcessForward measures the per-frame forward hot path (decode →
 // derive group → enqueue) in allocs/op. Validates the per-group/per-target
 // destination-address caches: steady-state should be allocation-free on this
-// path. Pre-stamped (SeqNum != 0) so frames forward verbatim — stable across
+// path. Pre-stamped (SeqNum != 0) so frames forward verbatim: stable across
 // iterations and exercising the Engine.Addr + Egress.enqueue addressing path.
 func BenchmarkProcessForward(b *testing.B) {
 	engine := shard.New(0xFF05, shard.DefaultGroupID, 8)

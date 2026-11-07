@@ -81,7 +81,7 @@ func startCapturedConn(t *testing.T) (*captureSink, net.Conn, chan struct{}) {
 }
 
 // More frames than one batch, streamed back-to-back: every frame must egress
-// and per-flow SeqNums must stay strictly monotonic in egress order — the
+// and per-flow SeqNums must stay strictly monotonic in egress order, the
 // batched cadence changes WHEN flushes happen, never order or completeness.
 func TestTCPBatchedCadenceDeliversAllFramesInOrder(t *testing.T) {
 	const n = maxTCPBatch*3 + 7 // several full batches + a partial tail
@@ -101,7 +101,7 @@ func TestTCPBatchedCadenceDeliversAllFramesInOrder(t *testing.T) {
 	}
 	frames := sink.frames()
 	if len(frames) != n {
-		t.Fatalf("egressed %d frames, want %d — batching lost frames", len(frames), n)
+		t.Fatalf("egressed %d frames, want %d: batching lost frames", len(frames), n)
 	}
 	// SeqNum is per-FLOW (HashKey = sender ∥ group ∥ subtree, bytes 40:48):
 	// distinct TxIDs shard to distinct groups, so monotonicity holds within
@@ -118,7 +118,7 @@ func TestTCPBatchedCadenceDeliversAllFramesInOrder(t *testing.T) {
 }
 
 // LIVENESS: one frame then an idle-but-open connection. The frame must egress
-// promptly (flushingReader drains before the blocking header read) — not sit
+// promptly (flushingReader drains before the blocking header read), not sit
 // enqueued until more traffic or close.
 func TestTCPSingleFrameThenIdleFlushes(t *testing.T) {
 	sink, cli, done := startCapturedConn(t)
@@ -132,7 +132,7 @@ func TestTCPSingleFrameThenIdleFlushes(t *testing.T) {
 
 // LIVENESS, partial-next-frame: a complete frame followed by a PARTIAL header
 // in the same segment. The buffer is non-empty (so a Buffered()==0 gate would
-// NOT fire) yet the next read blocks — the completed frame must still egress.
+// NOT fire) yet the next read blocks, the completed frame must still egress.
 func TestTCPPartialNextFrameStillFlushes(t *testing.T) {
 	sink, cli, done := startCapturedConn(t)
 	full := encodeTestTx(t, 0x02)
@@ -176,9 +176,9 @@ func TestTCPControlFramesInOneBatchDoNotAlias(t *testing.T) {
 }
 
 // With -coalesce ON, the batched TCP lane packs same-flow txns into BRC-142
-// bundle datagrams (fewer egress packets — the fabric-fanout/softirq relief)
+// bundle datagrams (fewer egress packets, the fabric-fanout/softirq relief)
 // with ZERO member loss, and drains via flushEgr->FlushCoalesced on close (no
-// stranding — the hazard the old per-frame path could never satisfy).
+// stranding, the hazard the old per-frame path could never satisfy).
 func TestTCPCoalesce_PacksSameFlowNoLoss(t *testing.T) {
 	// shard-bits 0 => a single group, so every tx lands in one (group,subtree)
 	// flow and is eligible to pack together.
@@ -207,7 +207,7 @@ func TestTCPCoalesce_PacksSameFlowNoLoss(t *testing.T) {
 	go func() { ti.handleConn(srv, egr); ti.flushEgr(egr); close(done) }()
 	// One segment carrying all txns: they buffer together so the batch
 	// accumulates before flushingReader drains it (net.Pipe delivers one Write
-	// as one read; a frame-per-Write would give 1-member bundles — the
+	// as one read; a frame-per-Write would give 1-member bundles, the
 	// documented "coalescing only packs when the batch FILLS" behaviour).
 	var stream []byte
 	for i := 0; i < n; i++ {
@@ -223,7 +223,7 @@ func TestTCPCoalesce_PacksSameFlowNoLoss(t *testing.T) {
 	// Fewer egress datagrams than txns (packing happened), every one a bundle,
 	// and the member count sums to exactly n (no member stranded or lost).
 	if len(sunk) == 0 || len(sunk) >= n {
-		t.Fatalf("egressed %d datagrams for %d txns — expected fewer (bundling)", len(sunk), n)
+		t.Fatalf("egressed %d datagrams for %d txns: expected fewer (bundling)", len(sunk), n)
 	}
 	members := 0
 	for i, d := range sunk {
@@ -243,7 +243,7 @@ func TestTCPCoalesce_PacksSameFlowNoLoss(t *testing.T) {
 
 // The coalesce linger packs frames that arrive as SEPARATE writes (the
 // subtx-gen-style one-tx-per-segment pattern that otherwise yields ~1-member
-// bundles) by holding the batch open up to the linger window — trading a
+// bundles) by holding the batch open up to the linger window: trading a
 // bounded latency for density on a fast network. Same-flow, arrivals within
 // the window => one packed batch, not N singleton bundles.
 func TestTCPCoalesceLinger_PacksAcrossSeparateWrites(t *testing.T) {
@@ -301,7 +301,7 @@ func TestTCPCoalesceLinger_PacksAcrossSeparateWrites(t *testing.T) {
 	// Density: the linger must have packed the separate writes well below the
 	// singleton-bundle count a no-linger frame-per-write would produce (== n).
 	if len(sunk) >= n/2 {
-		t.Fatalf("linger produced %d bundles for %d frame-per-write txns — not packing", len(sunk), n)
+		t.Fatalf("linger produced %d bundles for %d frame-per-write txns, not packing", len(sunk), n)
 	}
 	t.Logf("linger packed %d separate writes into %d bundles (R=%.1f)", n, len(sunk), float64(members)/float64(len(sunk)))
 }

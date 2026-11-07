@@ -80,7 +80,7 @@ func TestAllowStampedIngress(t *testing.T) {
 // waive EF.
 func TestRequireEF_AppliesToStampedFrames(t *testing.T) {
 	src := &net.UDPAddr{IP: net.ParseIP("::1"), Port: 12345}
-	raw := buildBareTx() // standard serialization — no EF marker
+	raw := buildBareTx() // standard serialization, no EF marker
 
 	t.Run("stamped_non_ef_rejected_on_a_relay_lane", func(t *testing.T) {
 		fw := makeForwarder()

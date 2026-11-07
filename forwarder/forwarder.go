@@ -193,7 +193,7 @@ type Forwarder struct {
 	requireEF bool
 
 	// allowStampedIngress admits framed BRC-124/BRC-128 input that already
-	// carries a SeqNum — a frame some other proxy stamped and emitted. Off by
+	// carries a SeqNum, a frame some other proxy stamped and emitted. Off by
 	// default: an ingress proxy accepts submissions, and a submitter has no
 	// business presenting a stamped frame. Turn it on only where the lane
 	// really does carry fabric traffic (a spine collect lane, a relay hop).
@@ -213,9 +213,9 @@ type Forwarder struct {
 	verifySubtreeRoot bool
 
 	// groupAddrs caches the multicast destination address by group index. The
-	// address is a pure function of (mcPrefix, mcGroupID, idx, egressPort) —
+	// address is a pure function of (mcPrefix, mcGroupID, idx, egressPort):
 	// invariant across resharding/bridging, which change the index a txid maps
-	// to, not the address of an index — so the cache never needs invalidation.
+	// to, not the address of an index, so the cache never needs invalidation.
 	// Shared across worker goroutines; atomic per slot for lock-free lazy fill.
 	// Eliminates a per-packet net.UDPAddr allocation on the forward hot path.
 	groupAddrs []atomic.Pointer[net.UDPAddr]
@@ -245,7 +245,7 @@ type Forwarder struct {
 	// BEEF object plane (BRC-148). beefEngine derives domain-tagged group
 	// indices (0x1000 + shardIndex(TopicID)) at the plane's own shard-bit
 	// width; beefMaxObject bounds an accepted submission's object bytes
-	// (the spec's ingress MUST-bound). Nil/zero until SetBEEF is called —
+	// (the spec's ingress MUST-bound). Nil/zero until SetBEEF is called:
 	// submissions and V9 frames are then dropped as "disabled".
 	beefEngine    *shard.PlaneEngine
 	beefMaxObject int
@@ -283,7 +283,7 @@ func (fw *Forwarder) Bridging() *BridgingEngine {
 // SetBindSource configures the source IPv6 the kernel will bind for
 // every multicast egress socket. Required when source-mode=ssm so SSM
 // receivers can pre-declare this proxy in their (S,G) join calls. Each
-// proxy replica MUST use a distinct bindSource — anycast / shared
+// proxy replica MUST use a distinct bindSource: anycast / shared
 // source IPs break PIM-SSM RPF.
 //
 // ip must be a valid IPv6 address (To4() == nil). Pass nil to clear.
@@ -295,7 +295,7 @@ func (fw *Forwarder) SetBindSource(ip net.IP) {
 // SetStampSource controls whether the proxy authoritatively (re)stamps the BRC
 // HashKey from the observed packet source IP. When true (default), a sender-
 // supplied HashKey is overwritten with seqhash.Hash(observedSrc, groupIdx,
-// subtreeID) — so the per-flow identity is the real ingress source, which is
+// subtreeID), so the per-flow identity is the real ingress source, which is
 // what makes own-traffic exclusion per-consumer at a direct edge. Set false
 // only when a load balancer / upstream proxy rewrites the source (every
 // consumer would otherwise collapse to the LB address); the sender's HashKey is
@@ -329,7 +329,7 @@ func (fw *Forwarder) SetEgressLoop(on bool) {
 // only if its in-frame 80-byte header hashes under the target its nBits
 // claims and that target is at least as hard as floorBits (the difficulty
 // floor, in Bitcoin compact form). floorBits 0 disables the floor (header
-// self-consistency only — weak, since a forger can claim trivial difficulty;
+// self-consistency only: weak, since a forger can claim trivial difficulty;
 // set a real floor in production). This validates the artifact, not the
 // emitter, so it stays permissionless. Coinbase (BRC-133) and subtree data
 // (BRC-132) carry no in-frame PoW and are unaffected. Must be called before
@@ -354,7 +354,7 @@ func (fw *Forwarder) SetRequireEF(require bool) { fw.requireEF = require }
 //
 // A stamped frame is one another proxy has already admitted, sharded, and
 // emitted. On a submission lane that is not a thing a submitter can legitimately
-// send, and SeqNum is just bytes in the frame — so accepting stamped input by
+// send, and SeqNum is just bytes in the frame, so accepting stamped input by
 // default let anyone opt out of the gates that key off it. Enable it only on a
 // lane that genuinely carries fabric traffic: a spine's collect socket, or a
 // relay hop forwarding another proxy's output.
@@ -376,7 +376,7 @@ func (fw *Forwarder) SetVerifySubtreeRoot(verify bool) { fw.verifySubtreeRoot = 
 
 // SetVerifyPayloadHash enables canonical-TxID verification of framed
 // BRC-124/BRC-128 (V2) input: the frame's TxID must equal the transaction id
-// of its payload — SHA256d over the standard serialization, EF extras
+// of its payload: SHA256d over the standard serialization, EF extras
 // excluded ([objfmt.TxID]), which is the id producers stamp and consumers
 // derive. Mismatches are dropped before the ingress dedup claim and before
 // group derivation. Off by default. Must be called before any worker starts.
@@ -390,14 +390,14 @@ func (fw *Forwarder) SetVerifySubtreeRoot(verify bool) { fw.verifySubtreeRoot = 
 //   - The ingress dedup claim is keyed on the TxID. With -ingress-dedup on
 //     (the default), a frame carrying an honest transaction's TxID over a
 //     forged payload wins the claim and the honest transaction is then
-//     suppressed at ingress — it never reaches a listener, so the listener's
+//     suppressed at ingress: it never reaches a listener, so the listener's
 //     own verification cannot undo it.
 //
 // Cost is one SHA256d over the payload per framed transaction, which on a CPU
 // without SHA-NI can exceed the whole forward path; measure on the target
 // hardware before enabling on a hot lane. Bare submissions are unaffected:
 // the proxy derives their TxID itself, so there is nothing to verify and no
-// cost is added. BRC-12 (V1) frames are forwarded verbatim regardless — the
+// cost is added. BRC-12 (V1) frames are forwarded verbatim regardless, the
 // legacy wire format carries no payload-bound identifier.
 func (fw *Forwarder) SetVerifyPayloadHash(v bool) { fw.verifyPayloadHash = v }
 
@@ -406,7 +406,7 @@ func (fw *Forwarder) SetVerifyPayloadHash(v bool) { fw.verifyPayloadHash = v }
 // during each receive batch and packed into bundle datagrams at batch end,
 // cutting egress packets-per-second for shard-dense traffic at zero added
 // latency (the window is one receive batch). maxBytes is the PATH MTU budget
-// for the emitted datagram (≤0 ⇒ [DefaultCoalesceMaxBytes]) — the same kind of
+// for the emitted datagram (≤0 ⇒ [DefaultCoalesceMaxBytes]), the same kind of
 // number as [Forwarder.SetFragMTU], so the IPv6 + UDP headers come off it
 // before the bundle is packed and a bundle built at 1500 leaves as a
 // 1500-byte datagram, not a 1548-byte one. maxMembers caps members per bundle
@@ -613,19 +613,19 @@ const (
 	// frames (BRC-12/124/128 and BRC-134 anchor), bare tx submissions, and
 	// BRC-148 BEEF objects (framed FrameVerV9 or a bare submission record).
 	// BRC-131 block / BRC-133 coinbase (FrameVerV4) and BRC-132 subtree
-	// data (FrameVerV5) are dropped and counted — broadcast-amplified
+	// data (FrameVerV5) are dropped and counted: broadcast-amplified
 	// classes enter only through a privileged socket. This is the class for
 	// the public user/consumer ingress port.
 	IngressTransaction
 
 	// IngressBEEF accepts only BRC-148 BEEF traffic. It is the class for the
-	// optional dedicated BEEF lane (flow separation / load balancing — never
+	// optional dedicated BEEF lane (flow separation / load balancing, never
 	// admission: the open port accepts BEEF regardless).
 	//
 	// In practice the lane carries SUBMISSION RECORDS ONLY: its one socket
 	// (-beef-listen-port) reads with objfmt's ClassBEEF record reader, which
 	// walks the record grammar, so a framed FrameVerV9 datagram never reaches
-	// DispatchClass on this class — it desyncs the reader and the connection
+	// DispatchClass on this class: it desyncs the reader and the connection
 	// is dropped. The dispatch still accepts a framed 0x09 frame because the
 	// class is the frame-set predicate, not the socket's grammar.
 	IngressBEEF
@@ -652,7 +652,7 @@ func (fw *Forwarder) Dispatch(egr *Egress, raw []byte, src net.Addr, workerID in
 //
 // On an IngressTransaction socket, BRC-131 block/BRC-133 coinbase (FrameVerV4)
 // and BRC-132 subtree data (FrameVerV5) are dropped (counted via
-// PrivilegedFrameRejected) — those frames may only enter through a privileged
+// PrivilegedFrameRejected), those frames may only enter through a privileged
 // (miner-tier) socket. raw is the UDP payload (the BRC frame); src is its
 // source; egr is the caller's per-worker egress queue. raw must remain valid
 // until egr.Flush returns.
@@ -714,7 +714,7 @@ func (fw *Forwarder) DispatchClass(egr *Egress, raw []byte, src net.Addr, worker
 		}
 		fw.ProcessAnchor(egr, raw, src, workerID)
 	case n > 6 && raw[6] == frame.FrameVerV9:
-		// BRC-148 BEEF object frame — open class (relay or pre-framed
+		// BRC-148 BEEF object frame: open class (relay or pre-framed
 		// submission), admitted on every ingress class.
 		if fw.rec != nil {
 			fw.rec.IngressMetered(metrics.IngressClassBEEF, privileged, n)
@@ -747,17 +747,17 @@ func (fw *Forwarder) DispatchClass(egr *Egress, raw []byte, src net.Addr, worker
 
 // dispatchBareTx admits a header-stripped transaction submitted without a
 // multicast frame (the push-ingest submission path). It is EF-only: a BRC-30
-// Extended Format transaction, one per datagram. BRC-12 raw is rejected — the
+// Extended Format transaction, one per datagram. BRC-12 raw is rejected, the
 // fabric is EF-native (Teranode requires Extended Format; extending a raw tx
 // needs a UTXO lookup, a wallet/submitter concern, not a fabric one). A bare tx
 // is inherently transaction-class, so it composes with the miner-tier gate for
-// free — no privileged (block/subtree/coinbase) frame can be expressed here.
+// free, no privileged (block/subtree/coinbase) frame can be expressed here.
 // DispatchBareTx admits a transaction on a connection that has ALREADY
 // committed to the bare grammar, WITHOUT the leading-magic sniff DispatchClass
 // does. A bare stream reader (objfmt.ClassTx) validates structure but not the
 // version bytes, so a crafted tx whose first 4 bytes equal the BSV magic would,
 // through DispatchClass, misroute to the framed relay path and be enqueued
-// VERBATIM — aliasing the reader's reused window, which under batched egress is
+// VERBATIM: aliasing the reader's reused window, which under batched egress is
 // overwritten before flush. The bare lane must never magic-route; this copies
 // into a fresh frame (via dispatchBareTx) so the enqueued bytes are stable.
 func (fw *Forwarder) DispatchBareTx(egr *Egress, tx []byte, src net.Addr, workerID int) {
@@ -831,7 +831,7 @@ func (fw *Forwarder) rejectPrivileged(raw []byte, workerID int) {
 // only for metrics labels.
 //
 // raw must remain valid until egr.Flush returns. egr may be nil; in that
-// case the frame is decoded and stamped but not enqueued — used by tests
+// case the frame is decoded and stamped but not enqueued: used by tests
 // that exercise only the stamping logic.
 func (fw *Forwarder) Process(egr *Egress, raw []byte, src net.Addr, workerID int) {
 	fw.process(egr, raw, src, workerID, fw.verifyPayloadHash)
@@ -894,7 +894,7 @@ func (fw *Forwarder) process(egr *Egress, raw []byte, src net.Addr, workerID int
 		// The canonical id binds only the transaction TxSize walks, so a
 		// payload of "one valid transaction followed by junk" would otherwise
 		// verify against the honest id and carry the tail onto the fabric.
-		// Require the payload to be exactly one transaction — the same bound
+		// Require the payload to be exactly one transaction, the same bound
 		// dispatchBareTx already applies to a bare submission.
 		if sz, szErr := objfmt.TxSize(f.Payload); szErr != nil || sz != len(f.Payload) {
 			if fw.rec != nil {
@@ -956,8 +956,8 @@ func (fw *Forwarder) process(egr *Egress, raw []byte, src net.Addr, workerID int
 		// BRC-142 within-batch coalescing: buffer eligible small txs into the
 		// per-worker bundle buffer (flushed at batch end). Skipped during a
 		// live-reshard bridging window (a bundle is not dual-emitted) and when a
-		// single member would not fit the bundle MTU. The bundle — not the
-		// member — is HashKey/SeqNum-stamped at flush, so raw is left untouched.
+		// single member would not fit the bundle MTU. The bundle, not the
+		// member: is HashKey/SeqNum-stamped at flush, so raw is left untouched.
 		if fw.coalesce && egr != nil && egr.coal != nil && fw.bridging.Load() == nil &&
 			bundle.HeaderSize+bundle.MemberOverhead(fw.coalesceCarryTxid)+len(f.Payload) <= fw.coalesceBudget {
 			egr.coal.add(ip, groupIdx, f.SubtreeID, f.TxID, f.Payload)
@@ -1046,7 +1046,7 @@ func (fw *Forwarder) fragment(egr *Egress, f *frame.Frame, ip [16]byte, groupIdx
 		hashKey, seqNum := fw.nextSeq(ip, groupIdx, f.SubtreeID)
 		if egr == nil {
 			// Tests exercise fragment() with no egress to verify seq
-			// allocation only — skip encode + queue.
+			// allocation only: skip encode + queue.
 			continue
 		}
 
@@ -1100,7 +1100,7 @@ func (fw *Forwarder) ProcessBlock(egr *Egress, raw []byte, src net.Addr, workerI
 
 	// Permissionless proof-of-work gate: a block announcement must carry valid
 	// work. Validates the artifact (the in-frame header), not the emitter, so
-	// no key/allowlist is consulted — anyone may announce, but a forged
+	// no key/allowlist is consulted: anyone may announce, but a forged
 	// announcement costs work proportional to the difficulty floor. Applies
 	// only to BlockMsgAnnounce (coinbase carries no header).
 	if fw.requireBlockPoW && bf.MsgType == frame.BlockMsgAnnounce {
@@ -1174,7 +1174,7 @@ func (fw *Forwarder) ProcessBlock(egr *Egress, raw []byte, src net.Addr, workerI
 // Anchor transactions are the root of a chain of dependent transactions and
 // must reach every subscriber regardless of shard assignment. They are
 // validated, HashKey/SeqNum-stamped, and enqueued for GroupBlockBroadcast
-// (FF0E::B:FFFE) — the same multicast group as BRC-131 block frames.
+// (FF0E::B:FFFE), the same multicast group as BRC-131 block frames.
 //
 // raw must remain valid until egr.Flush returns. egr may be nil for tests.
 func (fw *Forwarder) ProcessAnchor(egr *Egress, raw []byte, src net.Addr, workerID int) {
@@ -1502,7 +1502,7 @@ func (fw *Forwarder) ForwardControl(egr *Egress, raw []byte, idx shard.GroupIdx,
 // fields in-place if they are zero. HashKey is always re-derivable from
 // (senderIP, groupIdx, subtreeID), so we stamp it whenever it is zero,
 // independent of whether SeqNum was pre-stamped by the sender. SeqNum is only
-// stamped (and the flow counter advanced) when it is zero — pre-stamped
+// stamped (and the flow counter advanced) when it is zero: pre-stamped
 // SeqNums are preserved verbatim (used by gap injection in subtx-gen).
 func stampInPlace(raw []byte, ip [16]byte, groupIdx uint32, subtreeID [32]byte, fw *Forwarder) {
 	preSeq := binary.BigEndian.Uint64(raw[48:56])
@@ -1517,7 +1517,7 @@ func stampInPlace(raw []byte, ip [16]byte, groupIdx uint32, subtreeID [32]byte, 
 		// SeqNum was pre-stamped by the sender (e.g. gap-injection mode), so the
 		// nextSeq counter is not advanced here. Stamp the HashKey from the
 		// observed source whenever it was left zero OR the proxy is configured to
-		// authoritatively own the source identity (stampSource) — overwriting any
+		// authoritatively own the source identity (stampSource): overwriting any
 		// sender-supplied HashKey so own-traffic exclusion keys on the real
 		// ingress source. (When behind a source-rewriting LB, stampSource=false
 		// preserves the sender's HashKey.)

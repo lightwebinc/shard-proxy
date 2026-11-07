@@ -200,7 +200,7 @@ func TestLoadInstanceIDDefaultsToHostname(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	// InstanceID defaults to hostname when not set; flag default is "".
-	// Load does not fill it in — that is done by metrics.New. Just confirm
+	// Load does not fill it in, that is done by metrics.New. Just confirm
 	// the field is accessible and the load succeeds.
 	_ = cfg.InstanceID
 }
@@ -426,7 +426,7 @@ func TestLoadRejectsUnknownSourceMode(t *testing.T) {
 // -miner-tcp-listen-port / -tx-accept-privileged flags and their tests are gone.
 
 // TestLoadFragMTUDefaultsOn pins BRC-130 fragmentation ON by default. It shipped
-// defaulted to 0, which is not "frames sent unfragmented" — it is a hard, silent
+// defaulted to 0, which is not "frames sent unfragmented": it is a hard, silent
 // payload ceiling of (mtu-140) bytes: 1360 at MTU 1500. Above it a frame becomes a
 // single oversize datagram that can only cross the fabric via IPv6 IP-layer
 // fragmentation, the exact failure BRC-130 exists to prevent. Every subtree and
