@@ -1,0 +1,18 @@
+# actionlint and zizmor over this repository's workflows.
+name: Workflow lint
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/**"
+
+permissions:
+  contents: read
+
+jobs:
+  workflow-lint:
+    uses: lightwebinc/ci/.github/workflows/workflow-lint.yml@fcb564d49f07d6002441feb9d97ae3ce561e0f17 # main
