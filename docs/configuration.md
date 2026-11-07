@@ -9,7 +9,7 @@ as fallbacks; hard-coded defaults apply when neither is present.
 |------|---------|---------|-------------|
 | `-listen` | `LISTEN_ADDR` | `[::]` | Ingress bind address (without port) |
 | `-udp-listen-port` | `UDP_LISTEN_PORT` | `8725` | UDP transaction ingress: **framed** (BRC-124/128/legacy BRC-12), **bare** header-stripped transactions, or a **BEEF submission record** (leading `0xBEEF` tag), auto-detected from the leading bytes (one submission per datagram). See [Transaction ingress](architecture.md#transaction-ingress-framed-bare-and-ef-native) |
-| `-tcp-listen-port` | `TCP_LISTEN_PORT` | `0` | TCP ingress port for reliable delivery (0 = disabled) |
+| `-tcp-listen-port` | `TCP_LISTEN_PORT` | `0` | TCP ingress port (0 = disabled). TCP is the standard submission transport: an acknowledged stream, where UDP gives a submitter no retransmit and no acknowledgement |
 | `-subtree-listen-port` | `SUBTREE_LISTEN_PORT` | `0` | TCP port accepting BRC-143 subtree push frames (privileged; bind tunnel-side; standard 8726; 0 = disabled) |
 | `-block-listen-port` | `BLOCK_LISTEN_PORT` | `0` | TCP port accepting BRC-144 block push frames (privileged; bind tunnel-side; standard 8727; 0 = disabled) |
 | `-beef-listen-port` | `BEEF_LISTEN_PORT` | `0` | Optional dedicated TCP lane for BRC-148 BEEF submission records (flow separation only; BEEF also rides the tx port; standard 8728; 0 = disabled). See [BRC-148 BEEF object plane](#brc-148-beef-object-plane) |
@@ -77,8 +77,9 @@ This is the high-throughput path.
 
 ### TCP ingress (optional)
 
-TCP ingress provides reliable, ordered delivery for senders that require it
-(e.g. over lossy links). Grammar is detected **once per connection** from the
+TCP ingress is the standard submission transport: an ordered, acknowledged
+stream, where a UDP submitter gets no retransmit and no acknowledgement, so a
+dropped datagram is a silently lost transaction. Grammar is detected **once per connection** from the
 leading bytes: a `0xBEEF` record tag selects a BEEF submission-record stream;
 the BSV network magic selects a framed stream (BRC-12, BRC-124, or BRC-128
 frames concatenated end-to-end: a 44-byte header read, extended to 92 bytes

@@ -131,7 +131,7 @@ type Config struct {
 	// below every subtree and block frame, so those lanes go 100% dark.
 	//
 	// Set it to the smallest MTU on the egress path, NOT the local NIC's: on a
-	// tunnelled fabric that is the ip6gre inner MTU (underlay - 100), not 1500.
+	// tunneled fabric that is the ip6gre inner MTU (underlay - 100), not 1500.
 	// 0 disables fragmentation (frames forwarded verbatim regardless of size).
 	FragMTU int
 
@@ -211,7 +211,7 @@ type Config struct {
 	ControlGroupCompat       string
 	AutoConfigBeaconPort     int           // default 9001 (BRC-139 manifest port)
 	AutoConfigLiveResharding bool          // opt-in bridging mode (default: restart-on-adopt)
-	AutoConfigBridgingWindow time.Duration // 0 ⇒ honour pilot TransitionEpoch
+	AutoConfigBridgingWindow time.Duration // 0 ⇒ honor pilot TransitionEpoch
 }
 
 // Load parses flags and environment variables, validates all values, and
@@ -234,7 +234,7 @@ func Load() (*Config, error) {
 	flag.IntVar(&c.BlockListenPort, "block-listen-port", envInt("BLOCK_LISTEN_PORT", 0),
 		"TCP port accepting BRC-144 block push frames (privileged; bind tunnel-side; standard 8727; 0 = disabled)")
 	flag.IntVar(&c.BEEFListenPort, "beef-listen-port", envInt("BEEF_LISTEN_PORT", 0),
-		"optional dedicated TCP lane for BRC-148 BEEF submission records (flow separation only — BEEF also rides the tx port; standard 8728; 0 = disabled)")
+		"optional dedicated TCP lane for BRC-148 BEEF submission records (flow separation only; BEEF also rides the tx port; standard 8728; 0 = disabled)")
 	beefBits := flag.Uint("beef-shard-bits", uint(envInt("BEEF_SHARD_BITS", 0)),
 		"BRC-148 BEEF plane shard-bit width (band 0x1000 + 2^bits groups; 0-12, 0 = single group)")
 	flag.IntVar(&c.BEEFMaxObjectBytes, "beef-max-object-bytes", envInt("BEEF_MAX_OBJECT_BYTES", 1<<20),
@@ -282,7 +282,7 @@ func Load() (*Config, error) {
 	flag.DurationVar(&c.DrainTimeout, "drain-timeout", envDuration("DRAIN_TIMEOUT", 0),
 		"pre-drain delay before closing ingress sockets; /readyz returns 503 during this window (0 = disabled)")
 	flag.IntVar(&c.FragMTU, "frag-mtu", envInt("FRAG_MTU", 1500),
-		"path MTU for BRC-130 fragmentation; default 1500 (Ethernet baseline). Set to the SMALLEST MTU on the egress path — on a tunnelled fabric that is the ip6gre inner MTU (underlay-100), not the local NIC. 0 = disabled, which strands every payload above MTU-140 (1360 at 1500) as an undeliverable oversize datagram")
+		"path MTU for BRC-130 fragmentation; default 1500 (Ethernet baseline). Set to the SMALLEST MTU on the egress path; on a tunneled fabric that is the ip6gre inner MTU (underlay-100), not the local NIC. 0 = disabled, which strands every payload above MTU-140 (1360 at 1500) as an undeliverable oversize datagram")
 	flag.BoolVar(&c.Coalesce, "coalesce", envBool("COALESCE", false),
 		"opt-in BRC-142 frame coalescing (pack many small same-(group,subtree) tx per datagram to cut pps)")
 	flag.IntVar(&c.CoalesceMaxBytes, "coalesce-max-bytes", envInt("COALESCE_MAX_BYTES", 1500),
@@ -351,7 +351,7 @@ func Load() (*Config, error) {
 	flag.BoolVar(&c.AutoConfigLiveResharding, "live-resharding", envBool("LIVE_RESHARDING", false),
 		"opt-in BRC-139 live-resharding bridging mode (default: restart on ShardBits adoption)")
 	flag.DurationVar(&c.AutoConfigBridgingWindow, "bridging-window", envDuration("BRIDGING_WINDOW", 0),
-		"local floor on bridging duration; 0 ⇒ honour pilot TransitionEpoch verbatim")
+		"local floor on bridging duration; 0 ⇒ honor pilot TransitionEpoch verbatim")
 
 	flag.Parse()
 

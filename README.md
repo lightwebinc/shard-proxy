@@ -10,8 +10,8 @@
 
 A high-throughput proxy that receives Bitcoin SV (BSV Blockchain) transactions
 (BRC-124/BRC-128 or legacy BRC-12 frames, or bare header-stripped transactions)
-and BRC-148/149 BEEF submission records over UDP (or TCP for reliable
-delivery), derives an IPv6 multicast group address from the transaction ID (or
+and BRC-148/149 BEEF submission records over TCP (the standard submission
+transport) or UDP (lossy: a dropped datagram is a lost submission), derives an IPv6 multicast group address from the transaction ID (or
 the BEEF TopicID on the object plane), and retransmits to subscribers of the
 corresponding group. Further traffic segmentation is provided
 via subtree-level sharding. Reliable delivery to multicast receivers is supported

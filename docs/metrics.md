@@ -16,7 +16,7 @@ Go runtime (`go_*`) and process (`process_*`) collectors are also exported.
 | `bsp_packets_received_total` | counter | worker, iface | Datagrams received |
 | `bsp_bytes_received_total` | counter | worker, iface | Raw bytes received |
 | `bsp_packets_dropped_total` | counter | worker, iface, reason | Datagrams dropped, by reason (e.g. `decode_error`, `write_error`, `truncated`, `bundle_malformed`, `stamped_ingress`, `ingress_not_ef`, `beef_oversize`) |
-| `bsp_packet_size_bytes` | histogram | worker, iface | Datagram size distribution (64 B to 256 KiB buckets) |
+| `bsp_packet_size_bytes` | histogram | worker, iface | Datagram size distribution (64 B to 128 KiB buckets) |
 | `bsp_packets_forwarded_total` | counter | worker, iface | Datagrams forwarded to multicast |
 | `bsp_bytes_forwarded_total` | counter | worker, iface | Raw bytes forwarded |
 | `bsp_egress_errors_total` | counter | worker, iface | Egress socket write errors |

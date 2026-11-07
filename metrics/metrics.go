@@ -345,7 +345,7 @@ func New(instanceID string, numWorkers int, otlpEndpoint string, otlpInterval ti
 	r.promRxSize = promclient.NewHistogramVec(promclient.HistogramOpts{
 		Name:    "bsp_packet_size_bytes",
 		Help:    "Datagram size distribution",
-		Buckets: promclient.ExponentialBuckets(64, 2, 12), // 64 B .. 256 KiB
+		Buckets: promclient.ExponentialBuckets(64, 2, 12), // 64 B .. 128 KiB
 	}, []string{"worker", "network_interface_name"})
 	r.promTxPackets = promclient.NewCounterVec(promclient.CounterOpts{
 		Name: "bsp_packets_forwarded_total",
