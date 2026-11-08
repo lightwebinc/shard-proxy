@@ -166,6 +166,44 @@ func TestPrepareBEEFFramed_AdmitAndFragmentParity(t *testing.T) {
 	}
 }
 
+// TestPrepareBEEFFramed_DispatchCopies: a framed record handed to DispatchBEEF
+// leaves the caller's buffer free when the call returns, though the egress
+// holds what it queues until its Flush. The buffer is overwritten between
+// the two, and the flushed datagrams must still be the copied path's, whole
+// frames and BRC-130 fragments alike.
+func TestPrepareBEEFFramed_DispatchCopies(t *testing.T) {
+	src := &net.UDPAddr{IP: net.ParseIP("::1"), Port: 12345}
+	for _, size := range []int{len(beefTestObj), 4096, 64 << 10} {
+		var datagrams [2][][]byte
+		for i := range 2 {
+			fw, _ := makeBEEFForwarder(t)
+			fw.beefMaxObject = 8 << 20
+			fw.SetFragMTU(1280)
+			conn, _ := openLoopbackUDP(t)
+			egr := makeEgress(t, fw, conn)
+			rec := buildBEEFRecordBytes(t, []string{"tm_big"}, beefObj(size, int64(size)))
+			if i == 0 {
+				fw.DispatchBEEF(egr, fw.PrepareBEEF(rec, src), src, 0)
+			} else {
+				buf := framedBuf(rec, 0xA5)
+				fw.DispatchBEEF(egr, fw.PrepareBEEFFramed(buf, src), src, 0)
+				for j := range buf {
+					buf[j] = 0xDB // the caller reuses its buffer once the call returns
+				}
+			}
+			datagrams[i], _ = captureEnqueued(egr)
+		}
+		if len(datagrams[0]) == 0 || len(datagrams[0]) != len(datagrams[1]) {
+			t.Fatalf("size %d: %d datagrams copied, %d framed", size, len(datagrams[0]), len(datagrams[1]))
+		}
+		for j := range datagrams[0] {
+			if !bytes.Equal(datagrams[0][j], datagrams[1][j]) {
+				t.Fatalf("size %d: datagram %d changed with the caller's buffer after DispatchBEEF returned", size, j)
+			}
+		}
+	}
+}
+
 // BenchmarkPrepareBEEF and BenchmarkPrepareBEEFFramed: the copied preparation
 // allocates and zeroes a frame the size of the record and copies the record
 // into it; the framed one writes the 92-byte header into the room the caller

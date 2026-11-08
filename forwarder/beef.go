@@ -16,6 +16,7 @@
 package forwarder
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -165,6 +166,9 @@ func (fw *Forwarder) SubmitBEEF(egr *Egress, rec []byte, src net.Addr, workerID 
 type PreparedBEEF struct {
 	// frame is the FrameVer 0x09 frame, nil when the record was refused.
 	frame []byte
+	// borrowed is set when frame is the caller's buffer
+	// ([Forwarder.PrepareBEEFFramed]) rather than an allocation of its own.
+	borrowed bool
 	// result is the submission's result, "ok" when framed.
 	result  string
 	topics  int
@@ -215,8 +219,13 @@ const BEEFFrameHeadroom = frame.HeaderSize
 //
 // The frame is buf itself, so the caller keeps buf untouched, and does not
 // reuse it, until the record is done with: refused (the prepared record has no
-// frame, or AdmitBEEF returns nil), or fragmented (FragmentBEEFInto has
-// returned, whatever its result). buf shorter than the headroom is malformed.
+// frame, or AdmitBEEF returns nil), fragmented (FragmentBEEFInto has returned,
+// whatever its result), or dispatched (DispatchBEEF has returned: an egress
+// holds what it queues until its Flush, so DispatchBEEF copies a framed
+// record's frame, as PrepareBEEF would have). The record is used once: when
+// buf is the caller's again, neither the prepared record nor its admission is
+// passed to AdmitBEEF, FragmentBEEFInto or DispatchBEEF again. buf shorter
+// than the headroom is malformed.
 func (fw *Forwarder) PrepareBEEFFramed(buf []byte, src net.Addr) *PreparedBEEF {
 	if len(buf) < BEEFFrameHeadroom {
 		return &PreparedBEEF{result: "malformed"}
@@ -235,7 +244,7 @@ func (fw *Forwarder) PrepareBEEFFramed(buf []byte, src net.Addr) *PreparedBEEF {
 		return p
 	}
 	binary.BigEndian.PutUint32(buf[BEEFFrameHeadroom-4:BEEFFrameHeadroom], uint32(len(rec)))
-	p.frame, p.topics, p.deliver = buf, len(r.Topics), deliver
+	p.frame, p.borrowed, p.topics, p.deliver = buf, true, len(r.Topics), deliver
 	return p
 }
 
@@ -279,7 +288,10 @@ func (fw *Forwarder) prepareBEEFRecord(rec []byte, src net.Addr) (p *PreparedBEE
 // DispatchBEEF admits a prepared record: the submission is recorded, and a
 // framed one is metered and processed in order. The frame's ContentID was
 // computed by PrepareBEEF from the bytes it framed, so it is not computed a
-// second time to be checked.
+// second time to be checked. The egress holds the datagrams it is handed until
+// its Flush, so a frame prepared in the caller's buffer
+// ([Forwarder.PrepareBEEFFramed]) is copied first: the buffer is the caller's
+// again when this returns, whichever preparation made the record.
 func (fw *Forwarder) DispatchBEEF(egr *Egress, p *PreparedBEEF, src net.Addr, workerID int) {
 	if p == nil {
 		return
@@ -294,7 +306,11 @@ func (fw *Forwarder) DispatchBEEF(egr *Egress, p *PreparedBEEF, src net.Addr, wo
 		fw.rec.IngressMetered(metrics.IngressClassBEEF, false, len(p.frame))
 		fw.rec.BEEFTopics(p.topics, p.deliver)
 	}
-	fw.processBEEF(egr, p.frame, src, workerID, false)
+	raw := p.frame
+	if p.borrowed {
+		raw = bytes.Clone(raw)
+	}
+	fw.processBEEF(egr, raw, src, workerID, false)
 }
 
 // beefDeliverCount resolves how many of a record's n leading topics are
