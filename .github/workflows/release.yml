@@ -9,4 +9,4 @@ jobs:
   release:
     permissions:
       contents: write
-    uses: lightwebinc/ci/.github/workflows/gh-release.yml@fcb564d49f07d6002441feb9d97ae3ce561e0f17 # v0.6.2
+    uses: lightwebinc/ci/.github/workflows/gh-release.yml@5023f0405178abb0b30fba4f2f46d7b1667e70d2 # v0.6.3
