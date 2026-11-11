@@ -16,6 +16,7 @@
 package forwarder
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -165,6 +166,9 @@ func (fw *Forwarder) SubmitBEEF(egr *Egress, rec []byte, src net.Addr, workerID 
 type PreparedBEEF struct {
 	// frame is the FrameVer 0x09 frame, nil when the record was refused.
 	frame []byte
+	// borrowed is set when frame is the caller's buffer
+	// ([Forwarder.PrepareBEEFFramed]) rather than an allocation of its own.
+	borrowed bool
 	// result is the submission's result, "ok" when framed.
 	result  string
 	topics  int
@@ -188,31 +192,10 @@ func (p *PreparedBEEF) Len() int {
 // once it returns. Nothing here is a reject: the result is recorded by
 // DispatchBEEF.
 func (fw *Forwarder) PrepareBEEF(rec []byte, src net.Addr) *PreparedBEEF {
-	p := &PreparedBEEF{result: "ok"}
-	if fw.beefEngine == nil {
-		p.result = "disabled"
+	p, r, deliver := fw.prepareBEEFRecord(rec, src)
+	if r == nil {
 		return p
 	}
-	r, n, err := objfmt.DecodeBEEFRecord(rec)
-	if err != nil || n != len(rec) {
-		p.result = "malformed"
-		return p
-	}
-	if maxObj := fw.beefObjectBoundFor(src); maxObj > 0 && len(r.Object) > maxObj {
-		p.result = "oversize"
-		return p
-	}
-	if !objfmt.IsBEEFObject(r.Object) {
-		p.result = "bad_marker"
-		return p
-	}
-	// One record, one frame, at any topic count: the payload is the record
-	// verbatim so every name the publisher wrote reaches the subscriber, and
-	// DeliverCount bounds how many of the leading names delivery edges match.
-	// The open path (no policy) delivers the first topic only, which is what
-	// keeps a free, anonymous record from becoming fan-out; a policy may lift
-	// an identified source to its cap.
-	deliver := fw.beefDeliverCount(src, len(r.Topics))
 	buf, err := objfmt.BEEFMulticastRecord(rec, deliver)
 	if err != nil {
 		p.result = "malformed"
@@ -222,10 +205,93 @@ func (fw *Forwarder) PrepareBEEF(rec []byte, src net.Addr) *PreparedBEEF {
 	return p
 }
 
+// BEEFFrameHeadroom is the room a lane leaves ahead of a record it reads for
+// [Forwarder.PrepareBEEFFramed]: the FrameVer 0x09 frame header.
+const BEEFFrameHeadroom = frame.HeaderSize
+
+// PrepareBEEFFramed is [Forwarder.PrepareBEEF] for a record that was read into
+// buf[BEEFFrameHeadroom:], with the header's room left ahead of it: the frame is
+// built in place, its header written into buf[:BEEFFrameHeadroom], instead of
+// being copied into an allocation of its own. A lane that reads records into
+// pooled buffers then frames each one without a fresh allocation the size of
+// the object, the zeroing that comes with it, or a copy of the object. The
+// prepared record is byte for byte what PrepareBEEF makes of the same record.
+//
+// The frame is buf itself, so the caller keeps buf untouched, and does not
+// reuse it, until the record is done with: refused (the prepared record has no
+// frame, or AdmitBEEF returns nil), fragmented (FragmentBEEFInto has returned,
+// whatever its result), or dispatched (DispatchBEEF has returned: an egress
+// holds what it queues until its Flush, so DispatchBEEF copies a framed
+// record's frame, as PrepareBEEF would have). The record is used once: when
+// buf is the caller's again, neither the prepared record nor its admission is
+// passed to AdmitBEEF, FragmentBEEFInto or DispatchBEEF again. buf shorter
+// than the headroom is malformed.
+func (fw *Forwarder) PrepareBEEFFramed(buf []byte, src net.Addr) *PreparedBEEF {
+	if len(buf) < BEEFFrameHeadroom {
+		return &PreparedBEEF{result: "malformed"}
+	}
+	rec := buf[BEEFFrameHeadroom:]
+	p, r, deliver := fw.prepareBEEFRecord(rec, src)
+	if r == nil {
+		return p
+	}
+	// The header as frame.EncodeBEEF writes it for this record (unstamped:
+	// HashKey and SeqNum zero, as objfmt.BEEFMulticastRecord leaves them),
+	// with no payload to copy: the record is already where the payload goes.
+	hdr := &frame.BEEFFrame{ContentID: objfmt.ContentID(rec), TopicID: objfmt.TopicID(r.Topics[0]), DeliverCount: uint8(deliver)}
+	if _, err := frame.EncodeBEEF(hdr, buf[:BEEFFrameHeadroom]); err != nil {
+		p.result = "malformed"
+		return p
+	}
+	binary.BigEndian.PutUint32(buf[BEEFFrameHeadroom-4:BEEFFrameHeadroom], uint32(len(rec)))
+	p.frame, p.borrowed, p.topics, p.deliver = buf, true, len(r.Topics), deliver
+	return p
+}
+
+// prepareBEEFRecord is what PrepareBEEF and PrepareBEEFFramed share: the
+// record's grammar, the object's bound and marker, and the DeliverCount. r is
+// nil when the record is refused, with p.result saying why.
+func (fw *Forwarder) prepareBEEFRecord(rec []byte, src net.Addr) (p *PreparedBEEF, r *objfmt.BEEFRecord, deliver int) {
+	p = &PreparedBEEF{result: "ok"}
+	if fw.beefEngine == nil {
+		p.result = "disabled"
+		return p, nil, 0
+	}
+	r, n, err := objfmt.DecodeBEEFRecord(rec)
+	if err != nil || n != len(rec) {
+		p.result = "malformed"
+		return p, nil, 0
+	}
+	if maxObj := fw.beefObjectBoundFor(src); maxObj > 0 && len(r.Object) > maxObj {
+		p.result = "oversize"
+		return p, nil, 0
+	}
+	if !objfmt.IsBEEFObject(r.Object) {
+		p.result = "bad_marker"
+		return p, nil, 0
+	}
+	if len(r.Topics) == 0 {
+		// DecodeBEEFRecord admits no topicless record; this keeps the
+		// framed path's r.Topics[0] safe whatever the grammar becomes.
+		p.result = "malformed"
+		return p, nil, 0
+	}
+	// One record, one frame, at any topic count: the payload is the record
+	// verbatim so every name the publisher wrote reaches the subscriber, and
+	// DeliverCount bounds how many of the leading names delivery edges match.
+	// The open path (no policy) delivers the first topic only, which is what
+	// keeps a free, anonymous record from becoming fan-out; a policy may lift
+	// an identified source to its cap.
+	return p, r, fw.beefDeliverCount(src, len(r.Topics))
+}
+
 // DispatchBEEF admits a prepared record: the submission is recorded, and a
 // framed one is metered and processed in order. The frame's ContentID was
 // computed by PrepareBEEF from the bytes it framed, so it is not computed a
-// second time to be checked.
+// second time to be checked. The egress holds the datagrams it is handed until
+// its Flush, so a frame prepared in the caller's buffer
+// ([Forwarder.PrepareBEEFFramed]) is copied first: the buffer is the caller's
+// again when this returns, whichever preparation made the record.
 func (fw *Forwarder) DispatchBEEF(egr *Egress, p *PreparedBEEF, src net.Addr, workerID int) {
 	if p == nil {
 		return
@@ -240,7 +306,11 @@ func (fw *Forwarder) DispatchBEEF(egr *Egress, p *PreparedBEEF, src net.Addr, wo
 		fw.rec.IngressMetered(metrics.IngressClassBEEF, false, len(p.frame))
 		fw.rec.BEEFTopics(p.topics, p.deliver)
 	}
-	fw.processBEEF(egr, p.frame, src, workerID, false)
+	raw := p.frame
+	if p.borrowed {
+		raw = bytes.Clone(raw)
+	}
+	fw.processBEEF(egr, raw, src, workerID, false)
 }
 
 // beefDeliverCount resolves how many of a record's n leading topics are
