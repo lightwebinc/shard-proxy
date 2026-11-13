@@ -25,7 +25,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       -ldflags "-s -w -X github.com/lightwebinc/shard-proxy/metrics.Version=${VERSION}" \
       -o /out/shard-proxy .
 
-FROM gcr.io/distroless/static:nonroot@sha256:25ac8f0c3b2334a9eb05452266bd4697864a8c8ef0ef71e5e6480d7f92868329
+FROM gcr.io/distroless/static:nonroot@sha256:aafe993665bf6200db38a02c11a9351e782a84b6a45e7f33b6695638c88e3931
 USER nonroot:nonroot
 COPY --from=builder /out/shard-proxy /usr/local/bin/shard-proxy
 ENTRYPOINT ["/usr/local/bin/shard-proxy"]
