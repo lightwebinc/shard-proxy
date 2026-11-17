@@ -1,10 +1,10 @@
-# syntax=docker/dockerfile:1.28.0@sha256:bb22d9815c728170f72750f4e5b0d672e06176142e1d602c7e66c050100b7e5b
+# syntax=docker/dockerfile:1.29.0@sha256:572cebbc2b15e6f84c077742952674889cb63cd5e9b80abdffcbe587b6f19183
 #
 # Canonical multi-stage Dockerfile for shard-proxy.
 # Final image: distroless/static:nonroot, no in-image ENV defaults
 # (configure via Helm values.yaml or container env at runtime).
 
-FROM golang:1.27-alpine@sha256:eb61c3873c97416fff0116553fff65d67a3549f72e11d9758849a689cdd8b523 AS builder
+FROM golang:1.27-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS builder
 RUN apk add --no-cache git ca-certificates
 WORKDIR /src
 

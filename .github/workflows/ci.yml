@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   ci:
-    uses: lightwebinc/ci/.github/workflows/go-dagger.yml@5023f0405178abb0b30fba4f2f46d7b1667e70d2 # v0.6.3
+    uses: lightwebinc/ci/.github/workflows/go-dagger.yml@addd14064ef61ebf08d01de9b80bda61438880fb # v0.7.1
 
   e2e:
     name: e2e (host)
