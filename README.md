@@ -53,16 +53,20 @@ logging, graceful drain) are in
 ```bash
 make            # builds shard-proxy, send-test-frames, recv-test-frames, perf-test
 make test       # runs unit tests
-make test-e2e   # end-to-end test (builds all binaries, runs test/run-e2e.sh)
+make test-e2e   # end-to-end test (builds the proxy and the send/recv tools, runs test/run-e2e.sh)
 make clean      # removes built binaries
 ```
 
-`cmd/latency-sink` (one-way latency receiver for `perf-test -latency-stamp`)
-is built with `go build ./cmd/latency-sink`.
+The tools under `cmd/` (each lists its flags with `-h`):
+
+- `send-test-frames`: sends BRC-124 test frames (BRC-131 with `-block-announce`) to the proxy over UDP, or TCP with `-tcp`
+- `recv-test-frames`: joins multicast groups and prints every frame it receives
+- `perf-test`: sends frames at a set rate, scrapes the proxy's metrics, and writes a Markdown report
+- `latency-sink`: one-way latency receiver for `perf-test -latency-stamp`; not built by `make`, use `go build ./cmd/latency-sink`
 
 ## Requirements
 
-- Go 1.26 or later
+- Go 1.26.2 or later
 - Linux kernel 3.9+, FreeBSD 12.3+ (for `SO_REUSEPORT`), macOS
 - IPv6 enabled on the egress interface(s)
 - Multicast routing / MLD snooping configured for your subscriber fabric
@@ -101,7 +105,7 @@ environment variables, or CLI flags.
 
 ## Helm chart
 
-A Kubernetes Helm chart is published from a dedicated chart repository:
+A Kubernetes Helm chart is published from the `lightwebinc/charts` repository:
 
 - Repository: [`charts/shard-proxy`](https://github.com/lightwebinc/charts/tree/main/charts/shard-proxy)
 - Install: `helm install shard-proxy oci://ghcr.io/lightwebinc/charts/shard-proxy`
