@@ -22,7 +22,7 @@ is OTel's `target_info` gauge, which carries the `service_name`,
 | `bsp_packet_size_bytes` | histogram | worker, iface | UDP datagram size distribution (64 B to 128 KiB buckets) |
 | `bsp_packets_forwarded_total` | counter | worker, iface | Datagrams forwarded to shard and BEEF-plane groups; control-group frames count in `bsp_control_frames_forwarded_total` instead |
 | `bsp_bytes_forwarded_total` | counter | worker, iface | Raw bytes of those datagrams |
-| `bsp_egress_errors_total` | counter | worker, iface | Failed egress batch writes, one per interface per flush (`worker` is always `0`) |
+| `bsp_egress_errors_total` | counter | worker, iface | Egress flushes that still failed after their retries, one per interface per flush (`worker` is always `0`) |
 | `bsp_ingress_errors_total` | counter | worker, iface | Non-fatal ingress socket read errors |
 | `bsp_ingress_class_bytes_total` | counter | class, tier | Accepted ingress bytes by frame class (`tx`, `anchor`, `beef`, `block`, `subtree`, `coinbase`) and tier (`transaction`, `privileged`) |
 | `bsp_ingress_class_packets_total` | counter | class, tier | Accepted ingress frames, same labels |
@@ -59,7 +59,7 @@ is OTel's `target_info` gauge, which carries the `service_name`,
 | `bsp_beef_submissions_total` | counter | result | BRC-148 submission admission: `ok`, `malformed`, `oversize`, `bad_marker`, `disabled` |
 | `bsp_beef_topics_total` | counter | topic_role | Topic names on admitted records: `deliverable` (matched at the edge) or `label` (carried, never matched or billed) |
 | `bsp_control_frames_forwarded_total` | counter | ctrl_group | Control-group datagrams forwarded to multicast, BRC-130 fragments counted one by one: `block_control` (BRC-131), `subtree_data` (BRC-132), `anchor` (BRC-134), `subtree_group_announce` (BRC-127) |
-| `bsp_tcp_connections_total` | counter | none | Connections accepted on `-tcp-listen-port` (the push and BEEF lanes are not counted) |
+| `bsp_tcp_connections_total` | counter | none | Connections accepted on `-tcp-listen-port`, whatever they carry (BEEF records sent there included); the push lanes and the `-beef-listen-port` lane are not counted |
 | `bsp_tcp_bytes_received_total` | counter | none | Bytes read from those connections |
 | `bsp_tee_failed_total` | counter | kind | Datagrams the loopback tee could not deliver (retry cache or local listener mirror); non-zero means co-located cache misses |
 

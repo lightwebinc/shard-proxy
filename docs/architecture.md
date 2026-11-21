@@ -90,8 +90,10 @@ privileged, routing to `Forwarder.ProcessBlock`.
 - With `-require-block-pow` (default on), drops a BlockAnnounce whose in-frame
   header fails the proof-of-work check, before the ingress dedup claim. See
   [configuration](configuration.md#block-announce-proof-of-work).
-- Stamps `HashKey` as `XXH64(senderIPv6 ∥ 0xFFFE ∥ zeros)` and `SeqNum` as a monotonic
-  per-flow counter when the incoming `SeqNum` is zero.
+- When the incoming `SeqNum` is zero, stamps `HashKey` as
+  `XXH64(senderIPv6 ∥ 0xFFFE ∥ zeros)` and `SeqNum` as a monotonic per-flow counter.
+  A nonzero `SeqNum` is kept; `HashKey` is then stamped only when it is zero, or
+  always with `-stamp-source`.
 - Forwards the raw bytes verbatim to `GroupBlockBroadcast` (`FF0X::B:FFFE`) on all egress interfaces.
 - If the payload exceeds the BRC-130 fragment threshold, calls `fragmentBlock()` instead.
   Each fragment carries `OrigFrameVer=0x04` so listeners route the reassembled payload to
@@ -140,9 +142,9 @@ subscriber regardless of which shard their TxID would otherwise hash to. UDP wor
 
 `ProcessAnchor`:
 - Validates via `frame.DecodeAnchor`.
-- Stamps `HashKey` as `XXH64(senderIPv6 ∥ 0xFFF9 ∥ zeros)` and `SeqNum` as a monotonic
-  per-flow counter when the incoming `SeqNum` is zero. The virtual index `0xFFF9`
-  gives anchor frames an independent flow identity from BRC-131 block frames.
+- Stamps as `ProcessBlock` does, with `HashKey` as `XXH64(senderIPv6 ∥ 0xFFF9 ∥ zeros)`.
+  The virtual index `0xFFF9` gives anchor frames an independent flow identity from
+  BRC-131 block frames.
 - Forwards the raw bytes verbatim to `GroupBlockBroadcast` (`FF0X::B:FFFE`) on all egress interfaces.
 - No BRC-130 fragmentation (anchor transactions are expected to be small).
 
@@ -162,7 +164,7 @@ and is not restated here.
 **Within-batch origin coalescing.** Coalescing is bounded to a single receive
 batch: a UDP worker's `recvmmsg` batch (so `-recv-batch` must be above 1), or
 on the TCP lane the frames one connection has buffered (up to 64, flushed
-before any read that would block). As a worker dispatches a batch, eligible transactions are bucketed by
+before any read that would block, or after the linger when a build sets one). As a worker dispatches a batch, eligible transactions are bucketed by
 their `(sender, group, subtree)` flow in a per-`Egress` `coalBuffer`
 (`forwarder/coalesce.go`); member payloads alias the worker's reused receive
 buffers. At batch end (immediately before `Egress.Flush` overwrites those
@@ -220,7 +222,9 @@ connections and dispatches each connection to a per-connection goroutine. TCP
 and UDP share the same `forwarder.Forwarder` and egress interfaces; the TCP
 listener opens its own egress sockets (a pool of up to 8, with connections
 spread across them) and flushes each connection's egress in batches of up to
-64 frames, always before a read that would block.
+64 frames, always before a read that would block. (`TCPIngress.SetCoalesceLinger`
+lets a build that arms coalescing wait up to a linger for more frames before
+that flush; this binary sets no linger.)
 
 `handleConn` reads 44 bytes first (minimum header), then branches on the version byte:
 

@@ -451,7 +451,7 @@ func (ti *TCPIngress) Run(listenAddr string, listenPort int, done <-chan struct{
 // on any read error or protocol violation. Each goroutine owns its own
 // encode and assembly buffers; egr is flushed every maxTCPBatch frames and
 // before any read that would block (tcpBatcher), so a frame never waits on
-// the peer.
+// the peer, except up to the coalescing linger when one is set.
 func (ti *TCPIngress) handleConn(conn net.Conn, egr *forwarder.Egress) {
 	defer func() { _ = conn.Close() }()
 	remote := conn.RemoteAddr()
