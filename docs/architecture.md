@@ -164,7 +164,8 @@ and is not restated here.
 **Within-batch origin coalescing.** Coalescing is bounded to a single receive
 batch: a UDP worker's `recvmmsg` batch (so `-recv-batch` must be above 1), or
 on the TCP lane the frames one connection has buffered (up to 64, flushed
-before any read that would block, or after the linger when a build sets one). As a worker dispatches a batch, eligible transactions are bucketed by
+before any read that would block, or once a read sits idle for the linger
+when a build sets one). As a worker dispatches a batch, eligible transactions are bucketed by
 their `(sender, group, subtree)` flow in a per-`Egress` `coalBuffer`
 (`forwarder/coalesce.go`); member payloads alias the worker's reused receive
 buffers. At batch end (immediately before `Egress.Flush` overwrites those
@@ -223,8 +224,9 @@ and UDP share the same `forwarder.Forwarder` and egress interfaces; the TCP
 listener opens its own egress sockets (a pool of up to 8, with connections
 spread across them) and flushes each connection's egress in batches of up to
 64 frames, always before a read that would block. (`TCPIngress.SetCoalesceLinger`
-lets a build that arms coalescing wait up to a linger for more frames before
-that flush; this binary sets no linger.)
+lets a build that arms coalescing keep reading before that flush until a read
+sits idle for the linger: an idle-read timeout, not a bound on the total wait.
+This binary sets no linger.)
 
 `handleConn` reads 44 bytes first (minimum header), then branches on the version byte:
 

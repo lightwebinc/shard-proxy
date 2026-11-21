@@ -99,10 +99,10 @@ func (b *tcpBatcher) flush() {
 //
 // When coalescing is on, linger > 0 turns the eager flush into a bounded
 // accumulate window: rather than flush the instant the buffer empties, give
-// same-flow frames up to linger to arrive so bundles pack denser (higher
-// members/bundle) on a fast network. A frame is delayed at most linger; under
-// sustained load the read returns immediately (no timeout) and the batch fills
-// to maxTCPBatch instead. The in-progress frame (if the buffer emptied
+// same-flow frames time to arrive so bundles pack denser (higher
+// members/bundle) on a fast network. The linger is an idle-read timeout, not a
+// total bound: every read that returns data starts it again, so under steady
+// input the batch fills to maxTCPBatch instead. The in-progress frame (if the buffer emptied
 // mid-frame) is not yet in the batch, so flushing on a linger timeout never
 // strands it, the blocking retry completes it.
 type flushingReader struct {
@@ -451,7 +451,8 @@ func (ti *TCPIngress) Run(listenAddr string, listenPort int, done <-chan struct{
 // on any read error or protocol violation. Each goroutine owns its own
 // encode and assembly buffers; egr is flushed every maxTCPBatch frames and
 // before any read that would block (tcpBatcher), so a frame never waits on
-// the peer, except up to the coalescing linger when one is set.
+// the peer, except while coalescing with a linger set, when the batch waits
+// until a read sits idle for that linger.
 func (ti *TCPIngress) handleConn(conn net.Conn, egr *forwarder.Egress) {
 	defer func() { _ = conn.Close() }()
 	remote := conn.RemoteAddr()
