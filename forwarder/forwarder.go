@@ -448,7 +448,7 @@ func (fw *Forwarder) SetTxidDedup(d TxidDedup, prefix string) {
 // and an evicted entry is a LOST claim: the next copy of that transaction
 // wins the claim again and is re-stamped and re-emitted onto the fabric.
 // So an anonymous object-plane flood turns into duplicate TRANSACTION
-// delivery fleet-wide, on the paying path, without ever touching the
+// delivery network-wide, on the transaction plane, without ever touching the
 // transaction port. Separate stores make the two planes' capacity
 // independent, so the blast radius of a flood stays inside the plane it
 // arrived on.

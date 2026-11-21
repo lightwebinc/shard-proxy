@@ -5,7 +5,7 @@
 //
 // Usage:
 //
-//	perf-test -proxy-addr [fd20::2]:8725 -metrics-url http://192.0.2.20:9100 \
+//	perf-test -proxy-addr [2001:db8::2]:8725 -metrics-url http://192.0.2.20:9100 \
 //	  -shard-bits 2 -pps 10000 -duration 5m -payload-min 256 -payload-max 512 \
 //	  -lxd -receivers recv1,recv2,recv3 -output report.md
 package main

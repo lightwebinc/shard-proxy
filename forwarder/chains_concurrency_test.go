@@ -18,7 +18,7 @@ func TestNextSeq_ConcurrentSameFlow_MonotonicNoGaps(t *testing.T) {
 	const totalCalls = goroutines * perGoroutine
 
 	fw := makeForwarder()
-	src := &net.UDPAddr{IP: net.ParseIP("fd20::1"), Port: 12345}
+	src := &net.UDPAddr{IP: net.ParseIP("2001:db8::1"), Port: 12345}
 	ip := addrToIPv6(src)
 	var sub [32]byte
 	const groupIdx uint32 = 7

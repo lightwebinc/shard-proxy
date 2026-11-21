@@ -14,7 +14,7 @@ import (
 )
 
 // Magic is the 8-byte marker that identifies a stamped payload.
-const Magic = "1BSVLAT1"
+const Magic = "BSVLAT01"
 
 // Size is the total stamp length at the head of the payload.
 const Size = 20

@@ -42,7 +42,7 @@ func key(n int) [32]byte {
 // test: a shared bounded store means an open-class object flood evicts
 // TRANSACTION claims, and an evicted claim is a lost claim, so the next copy
 // of that transaction wins again and is re-emitted onto the fabric. The flood
-// arrives on the object plane and the damage lands on the paying one.
+// arrives on the object plane and the damage lands on the transaction plane.
 func TestBEEFFloodEvictsTxClaims_WhenShared(t *testing.T) {
 	fw := &Forwarder{}
 	shared := newBoundedSet(100)
