@@ -327,7 +327,12 @@ func TestApplier_DivergenceNeverRestarts(t *testing.T) {
 			var h hookLog
 			a := &Applier{Registry: reg, Evaluator: evaluator(running.Pin()), Hooks: h.hooks(true),
 				Rec: rec, Log: slog.New(logs), Interval: 5 * time.Millisecond, Running: running}
-			runFor(a, 150*time.Millisecond)
+			// Run until every field has warned, then long enough for a
+			// repeat warning, a hook or a restart to show up.
+			runUntil(t, a, func() bool {
+				w := logs.divergenceWarnings()
+				return w["shard_bits"] > 0 && w["source_mode"] > 0 && w["domain_1_shard_bits"] > 0
+			}, 100*time.Millisecond)
 
 			h.assertQuiet(t)
 			if got := divergenceCounted(t, rec); !slices.Equal(got, wantFields) {
