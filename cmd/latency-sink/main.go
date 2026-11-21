@@ -1,12 +1,12 @@
 // Command latency-sink joins one or more IPv6 multicast groups (ASM, or SSM
 // when -source is given), receives BRC-124 frames, and reports one-way latency
 // percentiles from latency stamps written by perf-test -latency-stamp (or any
-// sender using the latstamp layout, e.g. the lab harness ssm_tx.py --stamp).
+// sender using the latstamp layout).
 //
 // One-way figures are only meaningful when sender and sink clocks are
-// disciplined (chrony/NTP) or share a host. On the VM lab the authoritative
-// timing is host-side pcap; this tool is the deployment probe and a join/count
-// helper there.
+// disciplined (chrony/NTP) or share a host. Where a host-side packet capture
+// is available it is the authoritative timing; this tool is then a join/count
+// helper.
 //
 // Usage:
 //

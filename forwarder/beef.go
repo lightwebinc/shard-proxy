@@ -77,10 +77,9 @@ type BEEFSubmitPolicy interface {
 	DeliverCount(src net.IP, n int) int
 	// MaxObjectBytes returns a per-source object bound overriding the operator's
 	// open-ingress bound (0 = no override). Authenticated sources may carry a
-	// larger allowance than the open path: identity makes abuse accountable
-	// (roadmap D9). It may only RAISE the bound: the caller keeps the stricter
-	// of the two, so a policy can never widen past the configured ceiling by
-	// returning something absurd.
+	// larger allowance than the open path: identity makes abuse accountable.
+	// It may only RAISE the bound: the caller keeps the larger of the two, so a
+	// policy can never tighten a source below the operator's open bound.
 	MaxObjectBytes(src net.IP) int
 }
 

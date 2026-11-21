@@ -203,8 +203,8 @@ type msgMeta struct {
 	// two and silently withheld every one of those frames from the tee: a node
 	// never (S,G)-joins its own source, so the tee is the ONLY path by which it
 	// can cache its own emissions, and a submit edge was left unable to repair
-	// any of its own subtree or block traffic (measured on testnet tn-edge-1:
-	// 482 of 5787 own datagrams teed, cache_size 0, 0 hits / 1107 misses).
+	// any of its own subtree or block traffic (measured: 482 of 5787 own
+	// datagrams teed, cache_size 0, 0 hits / 1107 misses).
 	// Only genuinely unstamped control frames (ForwardControl / BRC-127
 	// SubtreeGroupAnnounce) are non-teeable, the cache would decode_error
 	// those, which is the drop the original gate was reaching for.
