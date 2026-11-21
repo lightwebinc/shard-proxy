@@ -548,11 +548,11 @@ func New(instanceID string, numWorkers int, otlpEndpoint string, otlpInterval ti
 		return nil, err
 	}
 	if r.ctrlFramesForwarded, err = meter.Int64Counter("bsp_control_frames_forwarded_total",
-		metric.WithDescription("BRC-127 control datagrams forwarded to multicast (e.g. SubtreeGroupAnnounce)")); err != nil {
+		metric.WithDescription("Control-group datagrams forwarded to multicast, by ctrl_group (block_control, subtree_data, anchor, subtree_group_announce)")); err != nil {
 		return nil, err
 	}
 	if r.tcpConnections, err = meter.Int64Counter("bsp_tcp_connections_total",
-		metric.WithDescription("TCP connections accepted on the control-plane ingress port")); err != nil {
+		metric.WithDescription("TCP connections accepted on the -tcp-listen-port ingress")); err != nil {
 		return nil, err
 	}
 	if r.tcpBytesReceived, err = meter.Int64Counter("bsp_tcp_bytes_received_total",
@@ -734,8 +734,10 @@ func (r *Recorder) TeeFailed(kind string, n int64) {
 	))
 }
 
-// ControlFrameForwarded records a BRC-127 control datagram forwarded via ForwardControl.
-// ctrlGroup names the destination control group (e.g. "subtree_group_announce").
+// ControlFrameForwarded records a control-group datagram forwarded to multicast:
+// a BRC-127 datagram sent via ForwardControl, or a BRC-131/132/134 frame or one of
+// its BRC-130 fragments. ctrlGroup is its label ("subtree_group_announce",
+// "block_control", "subtree_data", "anchor").
 func (r *Recorder) ControlFrameForwarded(ctrlGroup string) {
 	r.ctrlFramesForwarded.Add(context.Background(), 1, metric.WithAttributes(
 		attribute.String("ctrl_group", ctrlGroup),
@@ -743,7 +745,7 @@ func (r *Recorder) ControlFrameForwarded(ctrlGroup string) {
 }
 
 // IngressDeduped records a frame suppressed by the ingress TxID dedup gate.
-// frameType is one of "brc124", "brc131", "brc132", "brc134": matching the
+// frameType is one of "brc124", "brc131", "brc132", "brc134", "brc148": matching the
 // frame-version namespace used by other metrics. iface may be empty when the
 // dropping worker has no resolved interface yet.
 func (r *Recorder) IngressDeduped(iface string, workerID int, frameType string) {

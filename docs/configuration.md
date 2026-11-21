@@ -7,7 +7,7 @@ as fallbacks; hard-coded defaults apply when neither is present.
 
 | Flag | Env var | Default | Description |
 |------|---------|---------|-------------|
-| `-listen` | `LISTEN_ADDR` | `[::]` | Ingress bind address (without port) |
+| `-listen` | `LISTEN_ADDR` | `[::]` | Bind address (without port) of the TCP listeners: `-tcp-listen-port` and the subtree, block and BEEF lanes. The UDP workers bind the wildcard address whatever this is set to |
 | `-udp-listen-port` | `UDP_LISTEN_PORT` | `8725` | UDP transaction ingress: **framed** (BRC-124/128/legacy BRC-12), **bare** header-stripped transactions, or a **BEEF submission record** (leading `0xBEEF` tag), auto-detected from the leading bytes (one submission per datagram). See [Transaction ingress](architecture.md#transaction-ingress-framed-bare-and-ef-native) |
 | `-tcp-listen-port` | `TCP_LISTEN_PORT` | `0` | TCP ingress port (0 = disabled). TCP is the standard submission transport: an acknowledged stream, where UDP gives a submitter no retransmit and no acknowledgement |
 | `-subtree-listen-port` | `SUBTREE_LISTEN_PORT` | `0` | TCP port accepting BRC-143 subtree push frames (privileged; bind tunnel-side; standard 8726; 0 = disabled) |
@@ -29,7 +29,7 @@ as fallbacks; hard-coded defaults apply when neither is present.
 | `-scope` | `MC_SCOPE` | `site` | Multicast scope: `link` \| `site` \| `org` \| `global` |
 | `-mc-group-id` | `MC_GROUP_ID` | `0x000B` | IANA group-id (bytes 12–13); default = IANA Bitcoin allocation `FF0X::B` |
 | `-source-mode` | `SOURCE_MODE` | `asm` | Multicast addressing model: `asm` (FF0x; default) or `ssm` (FF3x per RFC 4607). SSM derives the prefix via `shard.Prefix(SSM, scope)` → FF35 site / FF3E global; RFC 8815 deprecates ASM at global scope and is rejected. Requires PIM-SSM in the fabric. See [Source-Specific Multicast design](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#source-specific-multicast-ssm). |
-| `-bind-source` | `BIND_SOURCE` | `""` | IPv6 literal bound on every multicast egress socket via `syscall.Bind` in `openEgressSocket`. **Required when `-source-mode=ssm`** and MUST be distinct per replica; anycast/ECMP-shared sources break PIM-SSM RPF. For single-identity deployments use VRRP active-standby. |
+| `-bind-source` | `BIND_SOURCE` | `""` | IPv6 literal every multicast egress socket is bound to (`openEgressSocket`). **Required when `-source-mode=ssm`** and MUST be distinct per replica; anycast/ECMP-shared sources break PIM-SSM RPF. For single-identity deployments use VRRP active-standby. |
 | `-stamp-source` | `STAMP_SOURCE` | `true` | Authoritatively stamp the BRC HashKey from the **observed** packet source IP, overriding any sender-supplied value, so the per-flow identity is the real ingress source. This is what makes own-traffic exclusion per-consumer at a direct/collapsed edge (the proxy sees each consumer's distinct source). Set `false` **only** behind a source-rewriting load balancer, where every consumer would otherwise appear as the LB address and the upstream-supplied HashKey is trusted instead. |
 | `-workers` | `NUM_WORKERS` | `runtime.NumCPU()` | Worker goroutine count (0 = NumCPU) |
 | `-debug` | `DEBUG` | `false` | Enable per-packet debug logging and multicast loopback (single-host testing); deprecated alias for `-log-level=debug` |
@@ -66,8 +66,8 @@ worker goroutines with no userspace coordination. Each worker pulls up to
 `-recv-batch` datagrams per `recvmmsg(2)` syscall and flushes the
 corresponding egress queue once per batch via `sendmmsg(2)` (one syscall per
 target interface), amortizing syscall cost across the batch. On platforms
-without `recvmmsg`/`sendmmsg` (macOS, FreeBSD) the `golang.org/x/net/ipv6`
-library transparently falls back to per-packet send/recv; the proxy is
+other than Linux (macOS, FreeBSD) the `golang.org/x/net/ipv6` library reads
+and writes one datagram per call instead; the proxy is
 functionally identical but does not gain the syscall-amortization speed-up.
 This is the high-throughput path.
 
@@ -180,7 +180,7 @@ Enable it only where the lane really does carry fabric traffic:
 |------------|---------|
 | Public / customer submission lane (8725) | leave off |
 | An ingress lane taking submissions from senders | leave off |
-| A collect lane whose whole purpose is re-emitting stamped fabric frames | **forced on** |
+| A collect lane whose whole purpose is re-emitting stamped fabric frames | on |
 | A relay hop forwarding another proxy's output | on |
 
 Enabling it does not waive any other gate: a stamped frame admitted this way is
@@ -207,8 +207,8 @@ Format anyway, so the check costs it nothing. A relay of non-EF payloads with
 
 Scope: the gate covers FrameVer `0x02` (BRC-124/BRC-128). BRC-12 (V1) decodes
 with a zero `SeqNum` and is unaffected; BRC-130 fragments (`0x03`) and the
-bundle/BEEF/block/subtree classes are outside it, as they are outside every
-other V2 gate.
+bundle/BEEF/block/subtree/anchor classes are outside it, as they are outside
+every other V2 gate.
 
 ---
 
@@ -362,19 +362,22 @@ Increasing bits by 1 splits every existing group into two child groups
 ## Forwarding
 
 For **BRC-124/BRC-128 frames**, if `SeqNum` (bytes 48–55) is already non-zero the
-sender has pre-stamped the frame and the proxy forwards it verbatim. If `SeqNum`
+sender has pre-stamped the frame: the proxy drops it unless
+`-allow-stamped-ingress` is set (see [Stamped ingress](#stamped-ingress)), and
+an admitted frame keeps its `SeqNum` while its `HashKey` is stamped from the
+observed source (with `-stamp-source=false`, only when it is zero). If `SeqNum`
 is zero the proxy stamps `HashKey` (bytes 40–47) as
 `XXH64(senderIPv6 ∥ groupIdx ∥ subtreeID)` and `SeqNum` (bytes 48–55) as a
 monotonic per-flow counter, in-place. The `SubtreeID` field is always passed
 through unchanged.
 
-For **BRC-12 (legacy) frames**, the proxy always forwards the original bytes verbatim without
-any modification.
+For **BRC-12 (legacy) frames**, the proxy forwards the original bytes without
+any modification (and rejects them under `-require-ef`).
 
 For **BRC-134 anchor frames** (`FrameVerV6`), the proxy forwards to `GroupBlockBroadcast`
 (`FF0X::B:FFFE`). Anchor frames use a virtual `groupIdx` of `0xFFF9` for HashKey derivation
-so anchors are accounted as an independent flow (label `brc134`) distinct from BRC-131 block
-control. See [bsv-multicast/docs/brc-134-anchor-transactions.md](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-134-anchor-transactions.md).
+so anchors form an independent flow, distinct from BRC-131 block control (and are counted
+under `ctrl_group="anchor"` in `bsp_control_frames_forwarded_total`). See [bsv-multicast/docs/brc-134-anchor-transactions.md](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-134-anchor-transactions.md).
 
 ---
 
@@ -390,7 +393,9 @@ transactions.
 Within a single receive batch the worker buckets eligible BRC-124/BRC-128
 transactions by their `(sender, group, subtree)` flow and, at batch end, packs
 each bucket into one or more bundle datagrams (up to the byte/member budget)
-before the egress flush. The byte budget is a **path MTU**: the packer first
+before the egress flush. A batch is a UDP worker's `recvmmsg` batch, so UDP
+input coalesces only with `-recv-batch` above 1; on the TCP lane it is what one
+connection has buffered (up to 64 frames). The byte budget is a **path MTU**: the packer first
 subtracts the 48-byte IPv6+UDP header, so the bundle body is capped at
 `-coalesce-max-bytes − 48` (1452 at the 1500 default) and the datagram that
 leaves the NIC is never larger than the configured MTU. Each bundle draws its `HashKey`/`SeqNum` from the **same
@@ -421,19 +426,19 @@ shard-proxy \
 ```
 
 Wire format (bundle header + member section), the `Coalescer`/`Decoalesce`/
-`Rebucketer` transforms, and the all-or-none TxID flag are specified once in the
-canonical BRC-142 spec; see
-[`shard-common/docs/protocol.md` § BRC-142](https://github.com/lightwebinc/shard-common/blob/main/docs/protocol.md#3a-brc-142-coalescing-bundle-frame-format)
-and the public
-[bsv-multicast/docs/brc-142-coalescing-frame.md](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-142-coalescing-frame.md).
+`Rebucketer` transforms, and the all-or-none TxID flag are specified once, in
+[bsv-multicast/docs/brc-142-coalescing-frame.md](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-142-coalescing-frame.md)
+(codec summary:
+[`shard-common/docs/protocol.md` § 3a](https://github.com/lightwebinc/shard-common/blob/main/docs/protocol.md#3a-brc-142-coalescing-bundle-frame-format)).
 Bundles are re-aligned to a receiver's shard generation (re-bucket) and split
 back to individual frames (decoalesce) at the **delivery edge** (listener), not
 in this proxy.
 
 Bundle metrics: `bsp_coalesce_bundles_total` (bundle datagrams flushed) and
-`bsp_coalesce_members_total` (member transactions packed) count origin packing,
-with the per-bundle member count distributed in `bsp_coalesce_members_per_bundle`.
-`bsp_coalesce_flush_total{reason}` records flushes by reason: `batch` for
+`bsp_coalesce_members_total` (member transactions in them) count bundles packed
+here and bundles relayed verbatim alike, with the per-bundle member count
+distributed in `bsp_coalesce_members_per_bundle`.
+`bsp_coalesce_flush_total{reason}` tells them apart: `batch` for
 origin-packed bundles, `relay` for verbatim spine re-emits, `encode_error` on a
 skipped bundle.
 
@@ -456,7 +461,7 @@ The metrics HTTP server (default `:9100`) exposes:
 
 - **`/metrics`**: Prometheus text format
 - **`/healthz`**: always `200 OK` if the process is running
-- **`/readyz`**: `200` when all workers are ready; `503` while starting or draining
+- **`/readyz`**: `200` when all workers are ready and, with `-tcp-listen-port` set, the TCP listener has bound; `503` while starting or draining
 - **`/loglevel`**: `POST /loglevel?level=<lvl>` changes the log level at runtime
 - **`/debug/pprof/*`**: `net/http/pprof`, mounted only with `-pprof`
 
@@ -480,7 +485,7 @@ For production with a load balancer or BGP, set `-drain-timeout` to at least the
 shard-proxy -iface eth0 -drain-timeout 15s
 ```
 
-> **`TimeoutStopSec` note:** systemd will send `SIGKILL` after `TimeoutStopSec` if the process has not exited. Ensure `TimeoutStopSec > drain-timeout + 15s` (OTLP flush + worker drain buffer). The default service unit sets `TimeoutStopSec=30`.
+> **`TimeoutStopSec` note:** systemd will send `SIGKILL` after `TimeoutStopSec` if the process has not exited. Ensure `TimeoutStopSec > drain-timeout + 15s` (OTLP flush + worker drain buffer). The service unit installed by the [ingress-infra](https://github.com/lightwebinc/ingress-infra) Ansible role sets `TimeoutStopSec=30`.
 
 ---
 
@@ -625,7 +630,7 @@ FF05::CAFE:<shard_index>          # With overridden group-id 0xCAFE
 ```
 
 `SHARD_BITS` is a fixed, deployment-wide setting shared by all subscribers.
-Doubling `SHARD_BITS` splits every existing group into two children;
+Increasing `SHARD_BITS` by one splits every existing group into two children;
 subscribers join additional groups without invalidating existing ones,
 so scale-up requires no redesign.
 
@@ -676,8 +681,9 @@ it on for any multi-proxy or bridged topology.
   forwarding the same TxID).
 - **Multiple proxies at one site**: point all proxies at the same Redis.
   Whichever proxy wins the SETNX multicasts; siblings drop.
-- **Listener marks the ingress set**: when the local listener has
-  `-mark-ingress-set` enabled, its courtesy SETNX populates the same
+- **Listener marks the ingress set**: when the local listener's courtesy
+  ingress mark is enabled (`-ingress-set-backend` or
+  `-ingress-set-redis-addr`), its SETNX populates the same
   namespace, so a TxID delivered via cross-site bridge prevents the local
   proxy from re-multicasting it.
 

@@ -8,7 +8,10 @@
 // conditionally stamps HashKey and SeqNum in-place at raw[40:48] and raw[48:56]:
 //
 //   - If SeqNum (raw[48:56]) is already non-zero the sender pre-stamped the
-//     frame; the proxy forwards it verbatim without modification.
+//     frame: it is dropped unless [Forwarder.SetAllowStampedIngress] admits
+//     it, and an admitted frame keeps its SeqNum while its HashKey is
+//     stamped from the observed source (with [Forwarder.SetStampSource] off,
+//     only when it is zero).
 //   - If SeqNum is zero the proxy stamps: HashKey = XXH64(senderIPv6 ∥ groupIdx ∥ subtreeID)
 //     (stable per flow); SeqNum = per-(sender, group, subtree) monotonic counter
 //     starting at 1. Each subtree therefore owns an independent sequence so
@@ -126,9 +129,6 @@ type TxidDedup interface {
 	Claim(prefix string, txid [32]byte) (bool, error)
 }
 
-// Forwarder decodes ingress frames (BRC-12 or BRC-124/BRC-128), derives the multicast
-// destination from the TxID, stamps HashKey/SeqNum for BRC-124/BRC-128 frames, and
-// optionally splits large payloads into BRC-130 fragment datagrams.
 // BridgingEngine carries the secondary shard engine used during a
 // BRC-139 live-resharding bridging window. When set on a Forwarder via
 // SetBridging, the per-frame emit path computes both the active and the
@@ -150,6 +150,9 @@ type BridgingEngine struct {
 	TransitionEpoch int64
 }
 
+// Forwarder decodes ingress frames (BRC-12 or BRC-124/BRC-128), derives the multicast
+// destination from the TxID, stamps HashKey/SeqNum for BRC-124/BRC-128 frames, and
+// optionally splits large payloads into BRC-130 fragment datagrams.
 type Forwarder struct {
 	engine       *shard.Engine
 	mcPrefix     uint16
@@ -345,8 +348,8 @@ func (fw *Forwarder) SetBlockPoW(require bool, floorBits uint32) {
 
 // SetRequireEF enables EF-native ingress: transaction submissions must be BRC-30
 // Extended Format; raw BRC-12 (V1) and raw BRC-124 (V2 without the marker)
-// submissions are rejected. Off by default. Relayed frames (already stamped) are
-// unaffected. Must be called before any worker starts.
+// submissions are rejected. Off by default. Stamped frames are not exempt. Must
+// be called before any worker starts.
 func (fw *Forwarder) SetRequireEF(require bool) { fw.requireEF = require }
 
 // SetAllowStampedIngress admits framed BRC-124/BRC-128 (V2) input whose SeqNum
@@ -824,10 +827,12 @@ func (fw *Forwarder) rejectPrivileged(raw []byte, workerID int) {
 // HashKey/SeqNum, then enqueue into egr for batched egress via Egress.Flush.
 //
 // For BRC-124/BRC-128 frames: if raw[48:56] (SeqNum) is non-zero the sender has
-// pre-stamped the frame and it is forwarded verbatim. If SeqNum is zero the
+// pre-stamped the frame; it is dropped unless stamped ingress is allowed, and an
+// admitted frame keeps its SeqNum. If SeqNum is zero the
 // proxy stamps raw[40:48] (HashKey) and raw[48:56] (SeqNum) in-place: HashKey is
 // stable per (sender, group, subtree) flow; SeqNum is a per-flow monotonic counter
-// starting at 1. BRC-12 frames are always forwarded verbatim. workerID is used
+// starting at 1. BRC-12 frames are forwarded verbatim (and rejected under
+// [Forwarder.SetRequireEF]). workerID is used
 // only for metrics labels.
 //
 // raw must remain valid until egr.Flush returns. egr may be nil; in that

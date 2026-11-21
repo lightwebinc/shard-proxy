@@ -3,7 +3,7 @@ module github.com/lightwebinc/shard-proxy
 go 1.26.2
 
 require (
-	github.com/lightwebinc/shard-common v0.27.2
+	github.com/lightwebinc/shard-common v0.27.3
 	github.com/prometheus/client_golang v1.25.0
 	github.com/prometheus/common v0.74.0
 	go.opentelemetry.io/otel v1.47.0

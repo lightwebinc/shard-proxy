@@ -7,8 +7,8 @@
 // The socket is opened posture-aware via netjoin: ASM
 // (IPV6_JOIN_GROUP) when sources is empty, SSM (one
 // MCAST_JOIN_SOURCE_GROUP per source) otherwise. ADVERT datagrams that
-// share the beacon group are counted-and-dropped: the proxy has no
-// downstream consumer for them.
+// share the beacon group are dropped: the proxy has no downstream
+// consumer for them.
 package manifest
 
 import (

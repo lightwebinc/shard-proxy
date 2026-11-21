@@ -99,10 +99,10 @@ func (b *tcpBatcher) flush() {
 //
 // When coalescing is on, linger > 0 turns the eager flush into a bounded
 // accumulate window: rather than flush the instant the buffer empties, give
-// same-flow frames up to linger to arrive so bundles pack denser (higher
-// members/bundle) on a fast network. A frame is delayed at most linger; under
-// sustained load the read returns immediately (no timeout) and the batch fills
-// to maxTCPBatch instead. The in-progress frame (if the buffer emptied
+// same-flow frames time to arrive so bundles pack denser (higher
+// members/bundle) on a fast network. The linger is an idle-read timeout, not a
+// total bound: every read that returns data starts it again, so under steady
+// input the batch fills to maxTCPBatch instead. The in-progress frame (if the buffer emptied
 // mid-frame) is not yet in the batch, so flushing on a linger timeout never
 // strands it, the blocking retry completes it.
 type flushingReader struct {
@@ -449,8 +449,10 @@ func (ti *TCPIngress) Run(listenAddr string, listenPort int, done <-chan struct{
 // handleConn reads a stream of BRC-12, BRC-124, or BRC-128 frames from conn
 // and forwards each via the per-connection Egress. The connection is closed
 // on any read error or protocol violation. Each goroutine owns its own
-// encode and assembly buffers; egr is flushed once per frame so latency
-// for reliable-delivery senders is not held up by batching.
+// encode and assembly buffers; egr is flushed every maxTCPBatch frames and
+// before any read that would block (tcpBatcher), so a frame never waits on
+// the peer, except while coalescing with a linger set, when the batch waits
+// until a read sits idle for that linger.
 func (ti *TCPIngress) handleConn(conn net.Conn, egr *forwarder.Egress) {
 	defer func() { _ = conn.Close() }()
 	remote := conn.RemoteAddr()
@@ -592,18 +594,10 @@ func (ti *TCPIngress) handleConn(conn net.Conn, egr *forwarder.Egress) {
 	}
 }
 
-// handleBareConn reads a stream of bare transactions (no frame header, no
-// envelope; delimited by transaction structure via objfmt.ClassTx) and admits
-// each through the shared [forwarder.Forwarder.DispatchClass] bare path:
-// TxSize-validated, EF-gated by the forwarder's require-ef setting, reframed
-// to an unstamped BRC-124/128 frame and stamped from the observed source:
-// byte-for-byte the same admission a bare UDP submission gets. A malformed
-// transaction desyncs the stream (there is no recovery boundary), so the
-// connection closes.
 // handleBEEFConn reads a stream of BRC-148 BEEF submission records (each an
 // explicit length-carrying envelope: 0xBEEF tag ∥ recordVer ∥ topics ∥
 // objectLen ∥ object) and admits each through the shared DispatchClass bare
-// path, which expands the record into one FrameVer 0x09 frame per topic.
+// path, which carries the record as one FrameVer 0x09 frame.
 // BEEF is an open class, so the socket's IngressClass admits it regardless.
 func (ti *TCPIngress) handleBEEFConn(br *bufio.Reader, remote net.Addr, egr *forwarder.Egress, bat *tcpBatcher, admit AdmitFunc) {
 	rd := objfmt.NewReader(br, objfmt.ClassBEEF)
@@ -633,9 +627,9 @@ func (ti *TCPIngress) handleBEEFConn(br *bufio.Reader, remote net.Addr, egr *for
 		if admit != nil {
 			admit(1, len(rec))
 		}
-		// SubmitBEEF copies the object into fresh per-topic frame buffers, so
-		// the Reader window may be reused on the next iteration, and the
-		// enqueued per-topic buffers are batch-safe for the same reason.
+		// SubmitBEEF copies the record into a fresh frame buffer, so the
+		// Reader window may be reused on the next iteration, and the enqueued
+		// frame is batch-safe for the same reason.
 		// Liveness: br is backed by the connection's flushingReader, so a
 		// blocking rd.Next() drains the batch first.
 		ti.fwd.DispatchClass(egr, rec, remote, -1, ti.class)
@@ -643,6 +637,14 @@ func (ti *TCPIngress) handleBEEFConn(br *bufio.Reader, remote net.Addr, egr *for
 	}
 }
 
+// handleBareConn reads a stream of bare transactions (no frame header, no
+// envelope; delimited by transaction structure via objfmt.ClassTx) and admits
+// each through the shared [forwarder.Forwarder.DispatchBareTx] bare path:
+// TxSize-validated, EF-gated by the forwarder's require-ef setting, reframed
+// to an unstamped BRC-124/128 frame and stamped from the observed source:
+// byte-for-byte the same admission a bare UDP submission gets. A malformed
+// transaction desyncs the stream (there is no recovery boundary), so the
+// connection closes.
 func (ti *TCPIngress) handleBareConn(br *bufio.Reader, remote net.Addr, egr *forwarder.Egress, bat *tcpBatcher, admit AdmitFunc) {
 	rd := objfmt.NewReader(br, objfmt.ClassTx)
 	for {
