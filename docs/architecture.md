@@ -479,18 +479,24 @@ win. With `-manifest-bootstrap=required` the proxy fails closed: it
 refuses to bind data-plane egress until `ShardBits` (and `SourceModeSSM`
 under SSM) reach quorum.
 
-Two adoption modes, selected by `-live-resharding`:
+The consumer never moves the running configuration:
 
-- **Restart-on-adopt (default).** A `ShardBits`/`SourceModeSSM` change
-  makes the `manifest` applier write the internal restart-signal
-  channel, which `main` handles as an early SIGTERM so the standard
-  [Graceful Shutdown](#graceful-shutdown) drain runs and the
-  orchestrator rolls the pod with the new parameters.
-- **Bridging (opt-in).** The applier installs a `forwarder.BridgingEngine`
-  so the per-frame fast path dual-emits to BOTH the active and successor
-  groups for the bridging window; listener-side egress dedup absorbs the
-  duplicates. Cutover follows the pilot's Successor-block `TransitionEpoch`
-  (floored by `-bridging-window`).
+- **Pinned values, compared with what runs.** `-shard-bits`, `-source-mode`
+  and `-beef-shard-bits` are pinned at their CLI values, and the `manifest`
+  applier compares the adopted view with that running configuration, never
+  with a zero value. Announcers that agree change nothing; announcers that
+  disagree surface as divergence (`multicast_manifest_divergence_total` on
+  every tick, a warning when it starts).
+- **No self-restart.** A restart re-reads the same flags, so it could not
+  apply an announced value: the proxy would come back unchanged, see the
+  same disagreement and, restarting again, loop. To move a proxy to a new
+  value, change the flag and restart it.
+- **Bridging (opt-in, `-live-resharding`).** An announced Successor block
+  installs a `forwarder.BridgingEngine`, so the per-frame fast path
+  dual-emits to BOTH the running and the successor groups; listener-side
+  egress dedup absorbs the duplicates. Dual emit lasts while the Successor
+  block holds quorum; restart the proxy with the successor's `-shard-bits`
+  inside that window.
 
 Flag reference and fail-closed rules: [configuration.md](configuration.md#auto-shard-config-brc-139).
 System-level design: [Automatic Shard Configuration design](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#automatic-shard-configuration).
@@ -548,7 +554,7 @@ shard-proxy/
                      with BRC-127 routing (tcp.go); single-class BRC-143/144
                      push lanes and the optional BEEF lane (objingress.go)
   manifest/          opt-in BRC-139 consumer: beacon-receive listener +
-                     applier (restart-on-adopt or BridgingEngine dual-emit)
+                     applier (divergence telemetry, BridgingEngine dual-emit)
   metrics/           OTel + Prometheus instrumentation
 ```
 

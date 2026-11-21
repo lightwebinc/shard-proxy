@@ -86,3 +86,9 @@ the `bsp_` prefix: `multicast_manifest_received_total`,
 `multicast_manifest_resharding_window_seconds`,
 `multicast_manifest_resharding_emit_duplicates_total`. See
 [Auto-Shard-Config](configuration.md#auto-shard-config-brc-139).
+
+The proxy pins every value it runs, so `multicast_manifest_adoption_total`
+stays absent there and `multicast_manifest_quorum_met_bits` always has bits 0
+and 1 (`shard_bits`, `source_mode`) set. Announcers that disagree with the
+running configuration show in `multicast_manifest_divergence_total{field}`
+instead.

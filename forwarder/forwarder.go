@@ -144,9 +144,10 @@ type BridgingEngine struct {
 	// destination is the SUCCESSOR layout.
 	Secondary *shard.Engine
 
-	// TransitionEpoch (Unix seconds) is the time at which the consumer
-	// MUST stop dual-emitting; the applier replaces Secondary with the
-	// new active engine and clears the BridgingEngine pointer.
+	// TransitionEpoch (Unix seconds) is the announced cutover time. It
+	// is informational: dual emit lasts until the BridgingEngine pointer
+	// is cleared (the proxy's manifest applier clears it when the
+	// Successor block loses quorum), and nothing swaps the active engine.
 	TransitionEpoch int64
 }
 
@@ -269,10 +270,10 @@ type Forwarder struct {
 // bridging engine. Safe to call from any goroutine; the per-frame
 // emit path reads the pointer atomically.
 //
-// Pass nil to exit bridging mode. Bridging-mode operators MUST
-// orchestrate the swap-and-clear at TransitionEpoch (the applier
-// rebuilds the primary engine with the successor's parameters and
-// then calls SetBridging(nil)).
+// Pass nil to exit bridging mode. The primary engine is never rebuilt
+// here: a process moves to the successor layout by restarting with the
+// successor's shard-bit width, which operators do inside the bridging
+// window.
 func (fw *Forwarder) SetBridging(b *BridgingEngine) {
 	fw.bridging.Store(b)
 }

@@ -565,7 +565,8 @@ shard-proxy \
   -pilot-quorum               2
 ```
 
-Default behavior is restart-on-adopt; add `-live-resharding` for the
+The proxy keeps running its CLI values and reports announcers that disagree
+as divergence; it never restarts itself. Add `-live-resharding` for the
 dual-emit bridging path.
 
 ### JSON logging and tracing
@@ -705,6 +706,18 @@ group; enabling auto-config adds a dedicated beacon-receive socket.
 See the [Automatic Shard Configuration design](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#automatic-shard-configuration)
 for the system-level design.
 
+The consumer never moves the running configuration. `-shard-bits`,
+`-source-mode` and `-beef-shard-bits` are pinned at their CLI values
+(BRC-139 manual pin precedence), and the applier compares the adopted
+view with them, never with a zero value. Announcers that agree change
+nothing. Announcers that disagree surface as divergence:
+`multicast_manifest_divergence_total{field}` counts every tick, and a
+warning is logged when a field starts diverging (and an info line when it
+clears). The proxy never restarts itself to adopt a value: a restart
+re-reads the same flags, so it would come back unchanged and, restarting
+again, loop. To move a proxy to a new value, change the flag and restart
+it.
+
 ### `-manifest-consumer-enabled` / `MANIFEST_CONSUMER_ENABLED` (default: `false`)
 
 Master switch. When true, the proxy opens an IPv6 multicast socket on
@@ -769,14 +782,17 @@ The flag is transitional; a conformant fleet runs `derived` everywhere.
 
 ### `-live-resharding` / `LIVE_RESHARDING` (default: `false`)
 
-Opt-in BRC-139 bridging mode. When false (default), a `ShardBits` or
-`SourceModeSSM` adoption triggers a graceful restart (the manifest
-applier writes into the internal restart-signal channel, which the
-main signal-select handles as an early SIGTERM so the standard drain
-path runs). When true, the applier installs a secondary
-`forwarder.BridgingEngine` on the forwarder so the per-frame fast
-path emits to BOTH the active and successor groups; the
-listener-side egress dedup absorbs the duplicate frames.
+Opt-in BRC-139 bridging mode. When false (default), the consumer only
+observes: see [Auto-Shard-Config](#auto-shard-config-brc-139). When true,
+an announced Successor block makes the applier install a secondary
+`forwarder.BridgingEngine` on the forwarder, so the per-frame fast path
+emits to BOTH the running and the successor groups; the listener-side
+egress dedup absorbs the duplicate frames. Dual emit lasts while the
+Successor block holds quorum and ends when the announcers retire it.
+Nothing in the proxy swaps engines: restart it with the successor's
+`-shard-bits` inside that window. `multicast_manifest_resharding_state`
+reads `2` once `TransitionEpoch` has passed while the Successor block is
+still adopted.
 
 ### `-bridging-window` / `BRIDGING_WINDOW` (default: `0`)
 
