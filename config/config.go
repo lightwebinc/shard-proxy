@@ -210,7 +210,7 @@ type Config struct {
 	// proxy is a receiver on that group, so the default is "both".
 	ControlGroupCompat       string
 	AutoConfigBeaconPort     int           // default 9001 (BRC-139 manifest port)
-	AutoConfigLiveResharding bool          // opt-in bridging mode (default: restart-on-adopt)
+	AutoConfigLiveResharding bool          // opt-in Successor dual-emit bridging (default: observe only; the proxy never restarts itself)
 	AutoConfigBridgingWindow time.Duration // 0 ⇒ honor pilot TransitionEpoch
 }
 
@@ -333,7 +333,7 @@ func Load() (*Config, error) {
 		"txid prefix bit width used as the shard key (1–12)")
 
 	flag.BoolVar(&c.AutoConfigEnabled, "manifest-consumer-enabled", envBool("MANIFEST_CONSUMER_ENABLED", false),
-		"opt-in BRC-139 manifest consumer for auto-shard-config (off by default)")
+		"opt-in BRC-139 manifest consumer (off by default); CLI values stay pinned and announcers that disagree are reported as divergence")
 	flag.StringVar(&c.AutoConfigBootstrap, "manifest-bootstrap", envStr("MANIFEST_BOOTSTRAP", "optional"),
 		"manifest bootstrap behavior: 'optional' (default) | 'required' (refuse data-plane bind until quorum)")
 	flag.IntVar(&c.AutoConfigPilotQuorum, "pilot-quorum", envInt("PILOT_QUORUM", 2),
@@ -349,7 +349,7 @@ func Load() (*Config, error) {
 	flag.IntVar(&c.AutoConfigBeaconPort, "manifest-beacon-port", envInt("MANIFEST_BEACON_PORT", 9001),
 		"UDP port on which the proxy joins the beacon group to receive BRC-139 manifests")
 	flag.BoolVar(&c.AutoConfigLiveResharding, "live-resharding", envBool("LIVE_RESHARDING", false),
-		"opt-in BRC-139 live-resharding bridging mode (default: restart on ShardBits adoption)")
+		"opt-in BRC-139 live-resharding: dual-emit to the successor layout while an announced Successor block holds quorum (default false: observe only; CLI values stay pinned and the proxy never restarts itself)")
 	flag.DurationVar(&c.AutoConfigBridgingWindow, "bridging-window", envDuration("BRIDGING_WINDOW", 0),
 		"local floor on bridging duration; 0 ⇒ honor pilot TransitionEpoch verbatim")
 

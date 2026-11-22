@@ -565,7 +565,8 @@ shard-proxy \
   -pilot-quorum               2
 ```
 
-Default behavior is restart-on-adopt; add `-live-resharding` for the
+The proxy keeps running its CLI values and reports announcers that disagree
+as divergence; it never restarts itself. Add `-live-resharding` for the
 dual-emit bridging path.
 
 ### JSON logging and tracing
@@ -705,6 +706,18 @@ group; enabling auto-config adds a dedicated beacon-receive socket.
 See the [Automatic Shard Configuration design](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#automatic-shard-configuration)
 for the system-level design.
 
+The consumer never moves the running configuration. `-shard-bits`,
+`-source-mode` and `-beef-shard-bits` are pinned at their CLI values
+(BRC-139 manual pin precedence), and the applier compares the adopted
+view with them, never with a zero value. Announcers that agree change
+nothing. Announcers that disagree surface as divergence:
+`multicast_manifest_divergence_total{field}` counts every tick, and a
+warning is logged when a field starts diverging (and an info line when it
+clears). The proxy never restarts itself to adopt a value: a restart
+re-reads the same flags, so it would come back unchanged and, restarting
+again, loop. To move a proxy to a new value, change the flag and restart
+it.
+
 ### `-manifest-consumer-enabled` / `MANIFEST_CONSUMER_ENABLED` (default: `false`)
 
 Master switch. When true, the proxy opens an IPv6 multicast socket on
@@ -714,9 +727,10 @@ are silently dropped), and runs the manifest evaluator on a 1 s tick.
 
 ### `-manifest-bootstrap` / `MANIFEST_BOOTSTRAP` (default: `optional`)
 
-`optional` ⇒ start with CLI/env values. `required` ⇒ refuse to bind
-data-plane egress until quorum is reached for `ShardBits` (and
-`SourceModeSSM` when SSM).
+`optional` ⇒ start with CLI/env values. `required` is accepted but not
+implemented: no gate holds data-plane egress back, and the proxy starts
+with its CLI/env values either way. Those values are the evaluator's pins,
+so there is no quorum on them to wait for.
 
 ### `-pilot-quorum` / `PILOT_QUORUM` (default: `2`)
 
@@ -769,14 +783,31 @@ The flag is transitional; a conformant deployment runs `derived` everywhere.
 
 ### `-live-resharding` / `LIVE_RESHARDING` (default: `false`)
 
-Opt-in BRC-139 bridging mode. When false (default), a `ShardBits` or
-`SourceModeSSM` adoption triggers a graceful restart (the manifest
-applier writes into the internal restart-signal channel, which the
-main signal-select handles as an early SIGTERM so the standard drain
-path runs). When true, the applier installs a secondary
-`forwarder.BridgingEngine` on the forwarder so the per-frame fast
-path emits to BOTH the active and successor groups; the
-listener-side egress dedup absorbs the duplicate frames.
+Opt-in BRC-139 bridging mode. When false (default), the consumer only
+observes: see [Auto-Shard-Config](#auto-shard-config-brc-139). When true,
+an announced Successor block makes the applier install a secondary
+`forwarder.BridgingEngine` on the forwarder, so the per-frame fast path
+emits each transaction to its running group and to its group in the
+successor's `ShardBits` layout; the listener-side egress dedup absorbs the
+duplicate frames. Dual emit lasts while the Successor block holds quorum
+and ends when the announcers retire it.
+
+Dual emit does not cover everything:
+
+- A fragmented transaction (BRC-130, payload above the `-frag-mtu`
+  capacity) goes to the running group only.
+- A relayed BRC-142 bundle goes only to the group recorded in its header,
+  in its origin's layout (origin-side coalescing pauses while bridging).
+- Every destination uses the running prefix, so a successor that changes
+  the source mode gets no dual emit under its own prefix.
+
+Receivers therefore join both layouts, each under its own source mode, for
+the whole migration, and leave the running one only after every proxy runs
+the successor's configuration. Nothing in the proxy swaps engines: inside
+the window, restart each proxy with the successor's `-shard-bits` and,
+when the successor changes it, `-source-mode` (plus `-bind-source` for
+SSM). `multicast_manifest_resharding_state` reads `2` once
+`TransitionEpoch` has passed while the Successor block is still adopted.
 
 ### `-bridging-window` / `BRIDGING_WINDOW` (default: `0`)
 

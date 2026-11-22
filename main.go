@@ -376,11 +376,13 @@ func main() {
 
 	// ── BRC-139 manifest consumer (auto-shard-config) ────────────────────
 	// Optional, off by default. When enabled, the proxy opens a beacon
-	// socket and runs the manifest evaluator. A ShardBits/SourceMode
-	// adoption triggers a restart by writing into restartSig, which the
-	// signal-handler block below treats as an early SIGTERM.
-	var restart proxymanifest.RestartRequest
-	restartSig := make(chan struct{}, 1)
+	// socket and runs the manifest evaluator against the configuration it
+	// runs. Every running value is pinned (manual CLI values win), so
+	// announcers that disagree surface as divergence, never as an adoption.
+	// The proxy never restarts itself: a restart re-reads the same flags,
+	// so it could not apply an announced value and would only repeat on
+	// every start. With -live-resharding an announced Successor installs
+	// the dual-emit bridging engine.
 	if cfg.AutoConfigEnabled {
 		// BRC-129 derives the control-plane group's prefix from the source
 		// mode, so under SSM the manifest announcer publishes to FF3x. The
@@ -422,90 +424,50 @@ func main() {
 			}
 		}()
 
+		// The configuration this process runs, BEEF plane included. It is
+		// what a restart would come back with, so it is the evaluator's pin
+		// and the applier's baseline.
+		running := proxymanifest.Running{
+			ShardBits:       uint8(cfg.ShardBits),
+			SourceModeSSM:   cfg.SourceMode == "ssm",
+			DomainShardBits: map[uint8]uint8{shard.DomainBEEF: uint8(cfg.BEEFShardBits)},
+		}
 		ev := commanifest.NewEvaluator(commanifest.EvaluatorConfig{
 			Quorum:     cfg.AutoConfigPilotQuorum,
 			Hysteresis: cfg.AutoConfigHysteresis,
-			Pin: commanifest.Pin{
-				ShardBits:       uint8(cfg.ShardBits),
-				HasShardBitsPin: true,
-				// The BEEF plane's width is CLI-pinned too (manual wins),
-				// so per-domain adoption is divergence-observability; drop
-				// the pin to let quorum drive it.
-				DomainShardBits: map[uint8]uint8{shard.DomainBEEF: uint8(cfg.BEEFShardBits)},
-			},
+			Pin:        running.Pin(),
 		})
-		hooks := proxymanifest.Hooks{
-			OnShardBitsChange: func(prev, next uint8) {
-				if cfg.AutoConfigLiveResharding {
-					// Bridging mode: the OnSuccessorChange hook is the
-					// authoritative driver for re-shard. Restart-on-
-					// ShardBits is suppressed because the bridging path
-					// keeps the proxy live; the actual swap to the new
-					// active engine happens when the Successor cutover
-					// triggers a process restart at TransitionEpoch
-					// (achieved by re-requesting restart inside the
-					// Successor handler when the window expires).
-					slog.Info("auto-config noted ShardBits change (live-resharding mode; restart deferred to TransitionEpoch)",
-						"prev", prev, "next", next)
-					return
-				}
-				slog.Warn("auto-config adopted new ShardBits (restart mode)",
-					"prev", prev, "next", next)
-				restart.Request("shard_bits change")
-				select {
-				case restartSig <- struct{}{}:
-				default:
-				}
-			},
-			OnSourceModeChange: func(prevSSM, nextSSM bool) {
-				if cfg.AutoConfigLiveResharding {
-					slog.Info("auto-config noted SourceMode change (live-resharding mode; restart deferred to TransitionEpoch)",
-						"prev_ssm", prevSSM, "next_ssm", nextSSM)
-					return
-				}
-				slog.Warn("auto-config adopted new SourceMode (restart mode)",
-					"prev_ssm", prevSSM, "next_ssm", nextSSM)
-				restart.Request("source_mode change")
-				select {
-				case restartSig <- struct{}{}:
-				default:
-				}
-			},
-			OnDomainShardBitsChange: func(domain, prev, next uint8) {
-				// v1: BEEF plane resharding is restart-on-adopt (no
-				// bridging). With the CLI pin above this fires only if the
-				// pin is reconfigured; without it, on a quorum shift.
-				slog.Warn("auto-config adopted new object-plane ShardBits (restart mode)",
-					"domain", domain, "prev", prev, "next", next)
-				restart.Request("domain_shard_bits change")
-				select {
-				case restartSig <- struct{}{}:
-				default:
-				}
-			},
-		}
+		var hooks proxymanifest.Hooks
 		if cfg.AutoConfigLiveResharding {
 			hooks.OnSuccessorChange = func(before, after *commanifest.SuccessorView) {
 				if after == nil {
-					// Successor cleared (cutover or quorum loss).
-					// Clearing here without a restart leaves the proxy
-					// still emitting under the prior active engine; the
-					// next ShardBitsChange (when the pilot rolls
-					// GenerationID forward) is what triggers the actual
-					// swap. Operators driving live re-shards typically
-					// also roll GenerationID at TransitionEpoch.
+					// Successor retired (or quorum lost): back to single
+					// emit under the running engine. Nothing here swaps
+					// engines: the proxy moves to the successor layout
+					// when it is restarted with the successor's
+					// -shard-bits (and -source-mode, when the successor
+					// changes it), inside the bridging window.
 					fwd.SetBridging(nil)
 					slog.Info("live-resharding: bridging cleared")
 					return
 				}
-				// Enter / refresh bridging: install a secondary engine
-				// derived from the successor's parameters. The shard
-				// engine uses the same MCPrefix unless successor declares
-				// SSM, in which case we flip to the FF3x prefix (via
-				// shard.Prefix). For brevity we use the SAME prefix as
-				// the active engine; ASM↔SSM transitions in bridging
-				// require a follow-up engine constructor that takes the
-				// SourceMode/Scope tuple per the SSM plan.
+				// The evaluator adopts a successor within one bit of the
+				// running -shard-bits, so at the ends of the range it can
+				// name 0 or 13, a width no plane runs (-shard-bits is
+				// 1-12). Do not bridge to it: dual emit would address
+				// groups of a layout that cannot exist.
+				if after.ShardBits < 1 || after.ShardBits > 12 {
+					fwd.SetBridging(nil)
+					slog.Warn("live-resharding: successor shard-bits out of range, not bridging",
+						"successor_shard_bits", after.ShardBits)
+					return
+				}
+				// Enter / refresh bridging: install a secondary engine with
+				// the successor's ShardBits. It keeps the running prefix,
+				// and the forwarder builds bridge destinations from the
+				// active engine's addresses anyway, so a successor that
+				// changes the source mode is not dual-emitted under its
+				// own prefix (docs/configuration.md, -live-resharding).
 				secondary := shard.New(cfg.MCPrefix, cfg.MCGroupID, uint(after.ShardBits))
 				fwd.SetBridging(&forwarder.BridgingEngine{
 					Secondary:       secondary,
@@ -521,6 +483,7 @@ func main() {
 			Evaluator: ev,
 			Rec:       rec,
 			Hooks:     hooks,
+			Running:   running,
 		}
 		wg.Add(1)
 		go func() {
@@ -558,14 +521,7 @@ func main() {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 
-	var received os.Signal
-	select {
-	case received = <-sig:
-	case <-restartSig:
-		slog.Warn("auto-config restart triggered, beginning drain",
-			"reason", restart.Reason())
-		received = syscall.SIGTERM
-	}
+	received := <-sig // block until SIGINT or SIGTERM
 
 	slog.Info("received signal, starting drain",
 		"signal", received,

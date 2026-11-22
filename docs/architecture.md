@@ -475,22 +475,37 @@ multicast subscriber), decodes BRC-139 ShardManifest datagrams into the
 shared `shard-common/manifest` `Registry`, and runs the `Evaluator` on a
 1 s tick. Adoption requires `≥ -pilot-quorum` distinct `Authoritative`
 announcers agreeing for the hysteresis window; manual CLI values always
-win. With `-manifest-bootstrap=required` the proxy fails closed: it
-refuses to bind data-plane egress until `ShardBits` (and `SourceModeSSM`
-under SSM) reach quorum.
+win. `-manifest-bootstrap=required` is accepted but not implemented: no
+gate holds data-plane egress back, so the proxy binds with its pinned CLI
+values either way.
 
-Two adoption modes, selected by `-live-resharding`:
+The consumer never moves the running configuration:
 
-- **Restart-on-adopt (default).** A `ShardBits`/`SourceModeSSM` change
-  makes the `manifest` applier write the internal restart-signal
-  channel, which `main` handles as an early SIGTERM so the standard
-  [Graceful Shutdown](#graceful-shutdown) drain runs and the
-  orchestrator rolls the pod with the new parameters.
-- **Bridging (opt-in).** The applier installs a `forwarder.BridgingEngine`
-  so the per-frame fast path dual-emits to BOTH the active and successor
-  groups for the bridging window; listener-side egress dedup absorbs the
-  duplicates. Cutover follows the pilot's Successor-block `TransitionEpoch`
-  (floored by `-bridging-window`).
+- **Pinned values, compared with what runs.** `-shard-bits`, `-source-mode`
+  and `-beef-shard-bits` are pinned at their CLI values, and the `manifest`
+  applier compares the adopted view with that running configuration, never
+  with a zero value. Announcers that agree change nothing; announcers that
+  disagree surface as divergence (`multicast_manifest_divergence_total` on
+  every tick, a warning when it starts).
+- **No self-restart.** A restart re-reads the same flags, so it could not
+  apply an announced value: the proxy would come back unchanged, see the
+  same disagreement and, restarting again, loop. To move a proxy to a new
+  value, change the flag and restart it.
+- **Bridging (opt-in, `-live-resharding`).** An announced Successor block
+  installs a `forwarder.BridgingEngine`, so the per-frame fast path
+  dual-emits each transaction to its running group and to its group in the
+  successor's `ShardBits` layout; listener-side egress dedup absorbs the
+  duplicates. Two paths emit once: a fragmented (BRC-130) transaction goes
+  to the running group only, and a relayed BRC-142 bundle goes only to the
+  group recorded in its header, in its origin's layout (origin-side
+  coalescing pauses while bridging). Every destination uses the running
+  prefix, so a successor that changes the source mode gets no dual emit
+  under its own prefix. Receivers therefore join both layouts, each under
+  its own source mode, for the whole migration, and leave the running one
+  only after every proxy runs the successor's configuration. Dual emit
+  lasts while the Successor block holds quorum; inside that window,
+  restart each proxy with the successor's `-shard-bits` and, when the
+  successor changes it, `-source-mode` (plus `-bind-source` for SSM).
 
 Flag reference and fail-closed rules: [configuration.md](configuration.md#auto-shard-config-brc-139).
 System-level design: [Automatic Shard Configuration design](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#automatic-shard-configuration).
@@ -548,7 +563,7 @@ shard-proxy/
                      with BRC-127 routing (tcp.go); single-class BRC-143/144
                      push lanes and the optional BEEF lane (objingress.go)
   manifest/          opt-in BRC-139 consumer: beacon-receive listener +
-                     applier (restart-on-adopt or BridgingEngine dual-emit)
+                     applier (divergence telemetry, BridgingEngine dual-emit)
   metrics/           OTel + Prometheus instrumentation
 ```
 

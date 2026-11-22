@@ -134,19 +134,24 @@ type TxidDedup interface {
 // SetBridging, the per-frame emit path computes both the active and the
 // bridging shard indices and emits to BOTH destinations. The listener's
 // per-TxID egress dedup absorbs the duplicate frame on the receive side.
+// Two paths emit once: fragment sends a BRC-130 transaction to the active
+// group only, and ProcessBundle sends a relayed BRC-142 bundle only to the
+// group recorded in its header.
 //
 // SetBridging is safe to call concurrently with the hot path. A nil
 // pointer means "no bridging in flight" and the hot path is a single
 // emit per frame (the normal, steady-state behaviour).
 type BridgingEngine struct {
-	// Secondary is the successor generation's shard engine. Distinct
-	// ShardBits and (optionally) addressing prefix so the dual-emit
-	// destination is the SUCCESSOR layout.
+	// Secondary is the successor generation's shard engine. Only its
+	// group indexing is used: the bridge destination is built from the
+	// active engine's addresses (addrFor), so a Secondary with another
+	// prefix (a successor that changes the source mode) is not honored.
 	Secondary *shard.Engine
 
-	// TransitionEpoch (Unix seconds) is the time at which the consumer
-	// MUST stop dual-emitting; the applier replaces Secondary with the
-	// new active engine and clears the BridgingEngine pointer.
+	// TransitionEpoch (Unix seconds) is the announced cutover time. It
+	// is informational: dual emit lasts until the BridgingEngine pointer
+	// is cleared (the proxy's manifest applier clears it when the
+	// Successor block loses quorum), and nothing swaps the active engine.
 	TransitionEpoch int64
 }
 
@@ -269,10 +274,10 @@ type Forwarder struct {
 // bridging engine. Safe to call from any goroutine; the per-frame
 // emit path reads the pointer atomically.
 //
-// Pass nil to exit bridging mode. Bridging-mode operators MUST
-// orchestrate the swap-and-clear at TransitionEpoch (the applier
-// rebuilds the primary engine with the successor's parameters and
-// then calls SetBridging(nil)).
+// Pass nil to exit bridging mode. The primary engine is never rebuilt
+// here: a process moves to the successor layout by restarting with the
+// successor's shard-bit width, which operators do inside the bridging
+// window.
 func (fw *Forwarder) SetBridging(b *BridgingEngine) {
 	fw.bridging.Store(b)
 }
