@@ -149,3 +149,22 @@ jobs:
           GOOS: freebsd
           GOARCH: amd64
         run: go vet ./...
+
+  # LICENSE-THIRD-PARTY is generated from what the binary actually links, so a
+  # new dependency nobody noticed is a license obligation nobody noticed. This
+  # fails the build instead.
+  licenses:
+    name: third-party licenses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: third-party licenses are current
+        env:
+          GOWORK: "off"
+        run: python3 scripts/gen-third-party-licenses.py . --check
