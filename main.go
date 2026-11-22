@@ -445,19 +445,18 @@ func main() {
 					// emit under the running engine. Nothing here swaps
 					// engines: the proxy moves to the successor layout
 					// when it is restarted with the successor's
-					// -shard-bits, inside the bridging window.
+					// -shard-bits (and -source-mode, when the successor
+					// changes it), inside the bridging window.
 					fwd.SetBridging(nil)
 					slog.Info("live-resharding: bridging cleared")
 					return
 				}
-				// Enter / refresh bridging: install a secondary engine
-				// derived from the successor's parameters. The shard
-				// engine uses the same MCPrefix unless successor declares
-				// SSM, in which case we flip to the FF3x prefix (via
-				// shard.Prefix). For brevity we use the SAME prefix as
-				// the active engine; ASM↔SSM transitions in bridging
-				// require a follow-up engine constructor that takes the
-				// SourceMode/Scope tuple per the SSM plan.
+				// Enter / refresh bridging: install a secondary engine with
+				// the successor's ShardBits. It keeps the running prefix,
+				// and the forwarder builds bridge destinations from the
+				// active engine's addresses anyway, so a successor that
+				// changes the source mode is not dual-emitted under its
+				// own prefix (docs/configuration.md, -live-resharding).
 				secondary := shard.New(cfg.MCPrefix, cfg.MCGroupID, uint(after.ShardBits))
 				fwd.SetBridging(&forwarder.BridgingEngine{
 					Secondary:       secondary,
