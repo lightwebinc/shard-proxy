@@ -99,7 +99,8 @@ docs/                 architecture, configuration, metrics
 ## Container image
 
 The Dockerfile produces a `gcr.io/distroless/static:nonroot` image with the
-single static binary at `/usr/local/bin/shard-proxy`. No in-image
+single static binary at `/usr/local/bin/shard-proxy`, and `LICENSE`, `NOTICE`
+and `LICENSE-THIRD-PARTY` in `/usr/share/doc/shard-proxy/`. No in-image
 `ENV` defaults are set; configure via Helm `values.yaml`, container
 environment variables, or CLI flags.
 
