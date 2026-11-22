@@ -28,4 +28,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM gcr.io/distroless/static:nonroot@sha256:aafe993665bf6200db38a02c11a9351e782a84b6a45e7f33b6695638c88e3931
 USER nonroot:nonroot
 COPY --from=builder /out/shard-proxy /usr/local/bin/shard-proxy
+# The licenses travel with the image, not only with the source tree. The binary
+# above is statically linked, so it contains the code of every module in
+# LICENSE-THIRD-PARTY and none of their license files. Apache-2.0 section 4,
+# MIT and BSD-3 all require their text to reach the recipient of a binary.
+COPY LICENSE NOTICE LICENSE-THIRD-PARTY /usr/share/doc/shard-proxy/
 ENTRYPOINT ["/usr/local/bin/shard-proxy"]

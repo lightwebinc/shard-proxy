@@ -36,10 +36,67 @@ This product includes third-party software, distributed under the terms
 of their respective licenses. Each dependency retains its own copyright;
 this notice does not modify those licenses.
 
-  github.com/lightwebinc/shard-common         Apache License 2.0
-  github.com/prometheus/client_golang         Apache License 2.0
-  go.opentelemetry.io/otel and exporters      Apache License 2.0
-  github.com/redis/go-redis/v9                BSD 2-Clause License
-  github.com/cespare/xxhash/v2                MIT License
+  github.com/aerospike/aerospike-client-go/v8   Apache License 2.0
+  github.com/beorn7/perks                       MIT License
+  github.com/cenkalti/backoff/v5                MIT License
+  github.com/cespare/xxhash/v2                  MIT License
+  github.com/go-logr/logr                       Apache License 2.0
+  github.com/go-logr/stdr                       Apache License 2.0
+  github.com/google/uuid                        BSD License
+  github.com/grpc-ecosystem/grpc-gateway/v2     BSD License
+  github.com/lightwebinc/shard-common           Apache License 2.0
+  github.com/munnerz/goautoneg                  BSD License
+  github.com/pandatix/go-abnf                   MIT License
+  github.com/prometheus/client_golang           Apache License 2.0
+  github.com/prometheus/client_model            Apache License 2.0
+  github.com/prometheus/common                  Apache License 2.0
+  github.com/prometheus/otlptranslator          Apache License 2.0
+  github.com/prometheus/procfs                  Apache License 2.0
+  github.com/redis/go-redis/v9                  BSD License
+  github.com/shirou/gopsutil/v4                 BSD License
+  github.com/tklauser/go-sysconf                BSD License
+  github.com/tklauser/numcpus                   Apache License 2.0
+  github.com/yuin/gopher-lua                    MIT License
+  go.opentelemetry.io/auto/sdk                  Apache License 2.0
+  go.opentelemetry.io/otel                      Apache License 2.0, BSD License
+  go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc
+                                                Apache License 2.0, BSD License
+  go.opentelemetry.io/otel/exporters/otlp/otlptrace
+                                                Apache License 2.0, BSD License
+  go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc
+                                                Apache License 2.0, BSD License
+  go.opentelemetry.io/otel/exporters/prometheus
+                                                Apache License 2.0, BSD License
+  go.opentelemetry.io/otel/log                  Apache License 2.0, BSD License
+  go.opentelemetry.io/otel/metric               Apache License 2.0, BSD License
+  go.opentelemetry.io/otel/sdk                  Apache License 2.0, BSD License
+  go.opentelemetry.io/otel/sdk/metric           Apache License 2.0, BSD License
+  go.opentelemetry.io/otel/trace                Apache License 2.0, BSD License
+  go.opentelemetry.io/proto/otlp                Apache License 2.0
+  go.uber.org/atomic                            MIT License
+  golang.org/x/net                              BSD License
+  golang.org/x/sync                             BSD License
+  golang.org/x/sys                              BSD License
+  golang.org/x/text                             BSD License
+  google.golang.org/genproto/googleapis/api     Apache License 2.0
+  google.golang.org/genproto/googleapis/rpc     Apache License 2.0
+  google.golang.org/grpc                        Apache License 2.0
+  google.golang.org/protobuf                    BSD License
+  gopkg.in/yaml.v3                              MIT License, Apache License 2.0
+
+The list is every module reachable from this repository's packages, so
+its code is inside any binary built here. Each module's full license
+text, and the NOTICE file a module ships (Apache-2.0 section 4(d) asks
+that its attribution notices travel with the code), is reproduced
+verbatim in LICENSE-THIRD-PARTY. That file is GENERATED from what the
+packages actually link rather than maintained by hand, and CI fails when
+it is stale; if this list and that file ever differ, the file is the
+current one.
+
+Every one of those licenses requires its own text to reach whoever
+receives a binary, not only whoever receives source, and static linking
+discards the modules' own license files, so LICENSE-THIRD-PARTY and this
+NOTICE must travel with any binary built from this repository. The image
+carries both, with LICENSE, in /usr/share/doc/shard-proxy/.
 
 =========================================================================
