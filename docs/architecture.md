@@ -475,9 +475,9 @@ multicast subscriber), decodes BRC-139 ShardManifest datagrams into the
 shared `shard-common/manifest` `Registry`, and runs the `Evaluator` on a
 1 s tick. Adoption requires `≥ -pilot-quorum` distinct `Authoritative`
 announcers agreeing for the hysteresis window; manual CLI values always
-win. With `-manifest-bootstrap=required` the proxy fails closed: it
-refuses to bind data-plane egress until `ShardBits` (and `SourceModeSSM`
-under SSM) reach quorum.
+win. `-manifest-bootstrap=required` is accepted but not implemented: no
+gate holds data-plane egress back, so the proxy binds with its pinned CLI
+values either way.
 
 The consumer never moves the running configuration:
 

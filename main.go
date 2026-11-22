@@ -451,6 +451,17 @@ func main() {
 					slog.Info("live-resharding: bridging cleared")
 					return
 				}
+				// The evaluator adopts a successor within one bit of the
+				// running -shard-bits, so at the ends of the range it can
+				// name 0 or 13, a width no plane runs (-shard-bits is
+				// 1-12). Do not bridge to it: dual emit would address
+				// groups of a layout that cannot exist.
+				if after.ShardBits < 1 || after.ShardBits > 12 {
+					fwd.SetBridging(nil)
+					slog.Warn("live-resharding: successor shard-bits out of range, not bridging",
+						"successor_shard_bits", after.ShardBits)
+					return
+				}
 				// Enter / refresh bridging: install a secondary engine with
 				// the successor's ShardBits. It keeps the running prefix,
 				// and the forwarder builds bridge destinations from the

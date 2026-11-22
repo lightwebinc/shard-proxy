@@ -727,9 +727,10 @@ are silently dropped), and runs the manifest evaluator on a 1 s tick.
 
 ### `-manifest-bootstrap` / `MANIFEST_BOOTSTRAP` (default: `optional`)
 
-`optional` ⇒ start with CLI/env values. `required` ⇒ refuse to bind
-data-plane egress until quorum is reached for `ShardBits` (and
-`SourceModeSSM` when SSM).
+`optional` ⇒ start with CLI/env values. `required` is accepted but not
+implemented: no gate holds data-plane egress back, and the proxy starts
+with its CLI/env values either way. Those values are the evaluator's pins,
+so there is no quorum on them to wait for.
 
 ### `-pilot-quorum` / `PILOT_QUORUM` (default: `2`)
 
