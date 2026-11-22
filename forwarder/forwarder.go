@@ -134,6 +134,8 @@ type TxidDedup interface {
 // SetBridging, the per-frame emit path computes both the active and the
 // bridging shard indices and emits to BOTH destinations. The listener's
 // per-TxID egress dedup absorbs the duplicate frame on the receive side.
+// Fragmented (BRC-130) transactions are the exception: fragment emits to
+// the active group only.
 //
 // SetBridging is safe to call concurrently with the hot path. A nil
 // pointer means "no bridging in flight" and the hot path is a single

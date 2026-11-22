@@ -787,8 +787,12 @@ observes: see [Auto-Shard-Config](#auto-shard-config-brc-139). When true,
 an announced Successor block makes the applier install a secondary
 `forwarder.BridgingEngine` on the forwarder, so the per-frame fast path
 emits to BOTH the running and the successor groups; the listener-side
-egress dedup absorbs the duplicate frames. Dual emit lasts while the
-Successor block holds quorum and ends when the announcers retire it.
+egress dedup absorbs the duplicate frames. Fragmented transactions
+(BRC-130, payload above the `-frag-mtu` capacity) are the exception: they
+go to the running group only, so receivers must keep the running layout
+joined until every proxy runs the successor's `-shard-bits`. Dual emit
+lasts while the Successor block holds quorum and ends when the announcers
+retire it.
 Nothing in the proxy swaps engines: restart it with the successor's
 `-shard-bits` inside that window. `multicast_manifest_resharding_state`
 reads `2` once `TransitionEpoch` has passed while the Successor block is

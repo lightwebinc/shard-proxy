@@ -494,9 +494,11 @@ The consumer never moves the running configuration:
 - **Bridging (opt-in, `-live-resharding`).** An announced Successor block
   installs a `forwarder.BridgingEngine`, so the per-frame fast path
   dual-emits to BOTH the running and the successor groups; listener-side
-  egress dedup absorbs the duplicates. Dual emit lasts while the Successor
-  block holds quorum; restart the proxy with the successor's `-shard-bits`
-  inside that window.
+  egress dedup absorbs the duplicates. Fragmented (BRC-130) transactions
+  go to the running group only, so receivers keep the running layout
+  joined until every proxy runs the successor's `-shard-bits`. Dual emit
+  lasts while the Successor block holds quorum; restart the proxy with the
+  successor's `-shard-bits` inside that window.
 
 Flag reference and fail-closed rules: [configuration.md](configuration.md#auto-shard-config-brc-139).
 System-level design: [Automatic Shard Configuration design](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#automatic-shard-configuration).
