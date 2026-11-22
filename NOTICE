@@ -84,14 +84,15 @@ this notice does not modify those licenses.
   google.golang.org/protobuf                    BSD License
   gopkg.in/yaml.v3                              MIT License, Apache License 2.0
 
-The list is every module reachable from this repository's packages, so
-its code is inside any binary built here. Each module's full license
-text, and the NOTICE file a module ships (Apache-2.0 section 4(d) asks
-that its attribution notices travel with the code), is reproduced
-verbatim in LICENSE-THIRD-PARTY. That file is GENERATED from what the
-packages actually link rather than maintained by hand, and CI fails when
-it is stale; if this list and that file ever differ, the file is the
-current one.
+The list is every module this repository's packages link in a Linux or
+FreeBSD build (a FreeBSD build links a subset of the Linux one), so its
+code is inside any binary built here for either. Each module's full
+license text, and the NOTICE file a module ships (Apache-2.0 section
+4(d) asks that its attribution notices travel with the code), is
+reproduced verbatim in LICENSE-THIRD-PARTY. That file is GENERATED from
+what the packages link in a Linux build rather than maintained by hand,
+and CI fails when it is stale; if this list and that file ever differ,
+the file is the current one.
 
 Every one of those licenses requires its own text to reach whoever
 receives a binary, not only whoever receives source, and static linking
