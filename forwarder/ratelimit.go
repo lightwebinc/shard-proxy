@@ -1,12 +1,12 @@
 // BEEF object-plane ingress rate limiting.
 //
 // The object plane is an OPEN class: anyone who can reach the public tx port
-// may publish, with no account and no identity. Until this file existed the
-// only bounds on that publisher were the per-object size ceiling and the
+// may publish, with no account and no identity. Without these budgets the
+// only bounds on that publisher are the per-object size ceiling and the
 // grammar, so a single source could put unbounded volume onto the fabric at
 // no cost to itself and at the cost of every consumer that elected the topic
-// (an empty election matches every topic, so an aggregator receives and is
-// billed for all of it).
+// (an empty election matches every topic, so an aggregator receives all of
+// it).
 //
 // Two tiers live here, and a third lives at the delivery edge:
 //
@@ -22,7 +22,7 @@
 // protects a consumer, because every door's traffic converges on the single
 // BEEF group that each delivery edge joins: a per-consumer budget there sheds
 // the aggregate no matter how many doors produced it, and a shed object is
-// not metered and therefore not billed.
+// never delivered.
 //
 // Relay and spine re-emission is never rate limited. Those frames were
 // admitted at the door where they entered and were counted against that
@@ -30,8 +30,8 @@
 // traffic in the middle of the network.
 //
 // Every budget is off by default (zero rate = unlimited). A library must not
-// silently start discarding a deployment's traffic on upgrade; the operated
-// build sets its own defensive defaults.
+// silently start discarding a deployment's traffic on upgrade; a deployment
+// sets its own defensive defaults.
 package forwarder
 
 import (

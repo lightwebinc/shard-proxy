@@ -57,7 +57,7 @@ is OTel's `target_info` gauge, which carries the `service_name`,
 | `bsp_block_pow_rejected_total` | counter | none | BRC-131 block announces failing the PoW gate |
 | `bsp_subtree_root_checks_total` | counter | result | `-verify-subtree-root` outcomes: `ok`, `mismatch`, `malformed` (last two dropped) |
 | `bsp_beef_submissions_total` | counter | result | BRC-148 submission admission: `ok`, `malformed`, `oversize`, `bad_marker`, `disabled` |
-| `bsp_beef_topics_total` | counter | topic_role | Topic names on admitted records: `deliverable` (matched at the edge) or `label` (carried, never matched or billed) |
+| `bsp_beef_topics_total` | counter | topic_role | Topic names on admitted records: `deliverable` (matched at the edge) or `label` (carried, never matched) |
 | `bsp_control_frames_forwarded_total` | counter | ctrl_group | Control-group datagrams forwarded to multicast, BRC-130 fragments counted one by one: `block_control` (BRC-131), `subtree_data` (BRC-132), `anchor` (BRC-134), `subtree_group_announce` (BRC-127) |
 | `bsp_tcp_connections_total` | counter | none | Connections accepted on `-tcp-listen-port`, whatever they carry (BEEF records sent there included); the push lanes and the `-beef-listen-port` lane are not counted |
 | `bsp_tcp_bytes_received_total` | counter | none | Bytes read from those connections |

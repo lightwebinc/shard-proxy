@@ -9,7 +9,7 @@
 // a shared socket the way framed input is: the class is known only from which
 // port the object arrived on. Each class therefore rides its own dedicated,
 // tunnel-bound port (subtree 8726, block 8727 by convention), a miner submits
-// as a tunnel consumer; the ports are never publicly exposed. This replaces the
+// over a tunnel; the ports are never publicly exposed. This replaces the
 // deprecated privileged multicast miner port.
 //
 // # Why TCP

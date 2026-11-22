@@ -38,7 +38,7 @@ as fallbacks; hard-coded defaults apply when neither is present.
 | `-instance` | `INSTANCE_ID` | hostname | OTel `service.instance.id` for federation |
 | `-otlp-endpoint` | `OTLP_ENDPOINT` | `""` | OTLP gRPC endpoint (empty = disabled) |
 | `-otlp-interval` | `OTLP_INTERVAL` | `30s` | OTLP push interval |
-| `-log-format` | `LOG_FORMAT` | `text` | Log output format: `text` (stderr, dev default) or `json` (stdout, for fleet aggregation). See [Unified Logging](https://github.com/lightwebinc/shard-common/blob/main/docs/logging.md) |
+| `-log-format` | `LOG_FORMAT` | `text` | Log output format: `text` (stderr, dev default) or `json` (stdout, for log aggregation). See [Unified Logging](https://github.com/lightwebinc/shard-common/blob/main/docs/logging.md) |
 | `-log-level` | `LOG_LEVEL` | `info` | Log level: `debug` \| `info` \| `warn` \| `error`. Runtime-togglable via `POST /loglevel?level=` and SIGHUP. `-debug` is a deprecated alias for `debug` |
 | `-trace-sampling` | `TRACE_SAMPLING` | `0` | Distributed-trace head sampling ratio `0`–`1` (`0` = tracing off, no-op tracer; exports via `-otlp-endpoint`; control-plane only, never the packet hot path) |
 | `-frag-mtu` | `FRAG_MTU` | `1500` | Path MTU for BRC-130 fragmentation; default 1500 (Ethernet baseline). Set to the **smallest** MTU on the egress path; on a tunneled fabric that is the tunnel inner MTU, not the local NIC. `0` = disabled, which strands every payload above MTU−140 (1360 at 1500) as an undeliverable oversize datagram |
@@ -119,8 +119,8 @@ arriving on an ingress socket are **dropped** and counted
 | Push lanes (privileged) | `-subtree-listen-port` (8726), `-block-listen-port` (8727) | BRC-143 subtree / BRC-144 block push objects, reframed to BRC-132 / BRC-131. |
 
 > **There is no miner multicast port.** Blocks and subtrees are not submitted
-> as multicast frames: a miner is a tunnel consumer that submits **BRC-144
-> block** and **BRC-143 subtree** push frames on the proxy's tunnel-bound push
+> as multicast frames: a miner submits **BRC-144 block** and **BRC-143
+> subtree** push frames on the proxy's tunnel-bound push
 > ports (8726 / 8727), which the proxy reframes into the fabric internally.
 > Multicast (BRC-131/132/133/134) is fabric-internal transport only. See
 > [DESIGN.md § Ingress authorization (miner-tier gate)](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#ingress-authorization-miner-tier-gate).
@@ -178,7 +178,7 @@ Enable it only where the lane really does carry fabric traffic:
 
 | Deployment | Setting |
 |------------|---------|
-| Public / customer submission lane (8725) | leave off |
+| Public submission lane (8725) | leave off |
 | An ingress lane taking submissions from senders | leave off |
 | A collect lane whose whole purpose is re-emitting stamped fabric frames | on |
 | A relay hop forwarding another proxy's output | on |
@@ -536,7 +536,7 @@ shard-proxy \
   -shard-bits   2 \
   -scope        site \
   -source-mode  ssm \
-  -bind-source  fd20::a01    # MUST be unique per replica
+  -bind-source  2001:db8::a01 # MUST be unique per replica
 ```
 
 `-source-mode=ssm` switches the data plane to the `FF3x::/32` SSM range
@@ -765,7 +765,7 @@ alike. Roll receivers (this proxy, and the listener) first, then the senders
 senders to `derived`, then the receivers. Setting a sender to `derived` before
 every receiver is upgraded is the one ordering that silently strands a peer.
 
-The flag is transitional; a conformant fleet runs `derived` everywhere.
+The flag is transitional; a conformant deployment runs `derived` everywhere.
 
 ### `-live-resharding` / `LIVE_RESHARDING` (default: `false`)
 

@@ -69,7 +69,7 @@ func beefClaimKey(contentID, topicID [32]byte) [32]byte {
 // only, the open ingress has no identity to hang more on, and one
 // deliverable topic per record is what keeps the open path free of
 // amplification. A downstream build installs a policy that decides per
-// SOURCE (e.g. consumer-tunnel STE ranges) up to its cap.
+// SOURCE (e.g. by authenticated source range) up to its cap.
 type BEEFSubmitPolicy interface {
 	// DeliverCount returns how many of the leading n topics a record from src
 	// may deliver. The forwarder clamps the answer to [1, n]; there is no
@@ -433,7 +433,7 @@ func (fw *Forwarder) checkBEEF(egr *Egress, raw []byte, src net.Addr, workerID i
 	// MUST on every acceptance path, and a frame addressed to no topic is
 	// undeliverable by construction: it still costs a full fabric emission,
 	// and because an empty topic election matches every topic it lands on
-	// every aggregator consumer and is billed to them. A pre-framed RECORD
+	// every aggregator consumer. A pre-framed RECORD
 	// must also put its first topic in the header slot, or the shard key and
 	// the names disagree and the edge matches a topic the publisher never
 	// led with.
@@ -494,7 +494,7 @@ func (fw *Forwarder) checkBEEF(egr *Egress, raw []byte, src net.Addr, workerID i
 	// SHA-256(ContentID ‖ TopicID). Taking that field on trust lets anyone
 	// CLAIM AN OBJECT THEY DO NOT HAVE: frame a topic with the ContentID of an
 	// object about to be published, win the claim, and every later copy of the
-	// real object is suppressed as a duplicate, fleet-wide, from one small
+	// real object is suppressed as a duplicate, network-wide, from one small
 	// frame with no account. That is targeted censorship of exactly the thing
 	// the plane exists to deliver. Recomputing it also restores BRC-148's
 	// "identity is the bytes" for consumers that trust the field.
@@ -504,12 +504,13 @@ func (fw *Forwarder) checkBEEF(egr *Egress, raw []byte, src net.Addr, workerID i
 	// here (checkContentID false). Only pre-framing can present one.
 	//
 	// Placed AFTER the rate budget and BEFORE the claim, deliberately. SHA-256d
-	// costs ~2.8us at 256B and ~5.6ms at 1MiB (measured 2026-09-15), so hashing
+	// costs ~2.8us at 256B and ~5.6ms at 1MiB (measured), so hashing
 	// before the budget would let an unauthenticated flood burn CPU at line
 	// rate; after it, the cost is bounded by a budget the operator already
 	// chose. Relay and spine re-emission (src == nil) is exempt for the same
 	// reason the budget exempts it: the frame was verified at the door where it
-	// entered, and re-hashing at every hop multiplies the cost fleet-wide.
+	// entered, and re-hashing at every hop multiplies the cost across the
+	// network.
 	if checkContentID && src != nil && bf.ContentID != objfmt.ContentID(bf.Payload) {
 		if fw.rec != nil {
 			fw.rec.PacketDropped(egrIface(egr), workerID, "beef_bad_contentid")

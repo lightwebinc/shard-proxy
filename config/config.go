@@ -274,7 +274,7 @@ func Load() (*Config, error) {
 	flag.BoolVar(&c.Debug, "debug", envBool("DEBUG", false),
 		"enable per-packet debug logging and multicast loopback (single-host testing); deprecated alias for -log-level=debug")
 	flag.StringVar(&c.LogFormat, "log-format", envStr("LOG_FORMAT", "text"),
-		"log output format: text (default, stderr) | json (stdout, for fleet aggregation)")
+		"log output format: text (default, stderr) | json (stdout, for log aggregation)")
 	flag.StringVar(&c.LogLevel, "log-level", envStr("LOG_LEVEL", "info"),
 		"log level: debug|info|warn|error (overridden to debug when -debug is set)")
 	flag.Float64Var(&c.TraceSampling, "trace-sampling", envFloat("TRACE_SAMPLING", 0),

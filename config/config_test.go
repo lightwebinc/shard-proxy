@@ -375,7 +375,7 @@ func TestLoadSSMRequiresBindSource(t *testing.T) {
 
 func TestLoadSSMSiteScope(t *testing.T) {
 	iface := realIface(t)
-	cfg, err := parseArgs(t, []string{"-iface", iface, "-source-mode", "ssm", "-scope", "site", "-bind-source", "fd20::1"})
+	cfg, err := parseArgs(t, []string{"-iface", iface, "-source-mode", "ssm", "-scope", "site", "-bind-source", "2001:db8::1"})
 	if err != nil {
 		t.Fatalf("Load(ssm,site): %v", err)
 	}
@@ -386,7 +386,7 @@ func TestLoadSSMSiteScope(t *testing.T) {
 
 func TestLoadSSMGlobalScope(t *testing.T) {
 	iface := realIface(t)
-	cfg, err := parseArgs(t, []string{"-iface", iface, "-source-mode", "ssm", "-scope", "global", "-bind-source", "fd20::1"})
+	cfg, err := parseArgs(t, []string{"-iface", iface, "-source-mode", "ssm", "-scope", "global", "-bind-source", "2001:db8::1"})
 	if err != nil {
 		t.Fatalf("Load(ssm,global): %v", err)
 	}
@@ -397,7 +397,7 @@ func TestLoadSSMGlobalScope(t *testing.T) {
 
 func TestLoadSSMRejectsLinkScope(t *testing.T) {
 	iface := realIface(t)
-	_, err := parseArgs(t, []string{"-iface", iface, "-source-mode", "ssm", "-scope", "link", "-bind-source", "fd20::1"})
+	_, err := parseArgs(t, []string{"-iface", iface, "-source-mode", "ssm", "-scope", "link", "-bind-source", "2001:db8::1"})
 	if err == nil {
 		t.Fatal("Load(ssm,link) = nil, want error (only site|global valid in SSM)")
 	}

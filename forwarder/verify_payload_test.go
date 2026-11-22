@@ -140,7 +140,7 @@ func TestVerifyPayloadHash(t *testing.T) {
 
 	// TxID walks the transaction and ignores whatever follows it, so without
 	// an explicit length bound "honest tx ‖ junk" verifies against the honest
-	// id and the tail rides onto the fabric billed as payload.
+	// id and the tail rides onto the fabric as payload.
 	t.Run("trailing_bytes_dropped", func(t *testing.T) {
 		fw := makeForwarder()
 		fw.SetVerifyPayloadHash(true)

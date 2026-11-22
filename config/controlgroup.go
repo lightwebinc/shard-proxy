@@ -24,7 +24,7 @@ import (
 // advertising into FF05::B:FFFD, and a beacon that lands on the wrong group
 // raises no error anywhere: the symptom is silence. This switch exists
 // only to make that transition ordered and observable. It is temporary:
-// once the fleet is on "derived" the flag and this file go away.
+// once every peer runs "derived" the flag and this file go away.
 //
 // ROLLOUT ORDER (the same note is in shard-listener, retry-endpoint and
 // shard-manifest):

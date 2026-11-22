@@ -205,7 +205,7 @@ func TestFragment_IndependentSeqNums(t *testing.T) {
 // TestFragment_HashKeyStable verifies HashKey is stable across fragment allocations.
 func TestFragment_HashKeyStable(t *testing.T) {
 	fw := makeFragForwarder(1500)
-	src := &net.UDPAddr{IP: net.ParseIP("fd20::1"), Port: 1}
+	src := &net.UDPAddr{IP: net.ParseIP("2001:db8::1"), Port: 1}
 	ip := addrToIPv6(src)
 	var subID [32]byte
 	const groupIdx = uint32(5)

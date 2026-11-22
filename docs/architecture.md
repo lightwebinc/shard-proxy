@@ -502,7 +502,7 @@ The proxy uses the shared `shard-common/logging` package: `main` calls
 `service.{name,instance.id,version}` identity triple (the same tuple the OTLP
 metrics resource attributes use, so logs and metrics join on shared
 dimensions). `-log-format json` emits one JSON object per line on stdout for
-fleet aggregation; `text` (default) is human-readable on stderr. `-log-level`
+log aggregation; `text` (default) is human-readable on stderr. `-log-level`
 is runtime-togglable without a restart via `POST /loglevel?level=<lvl>` on the
 metrics server and via SIGHUP (toggles debug↔configured level).
 

@@ -213,8 +213,8 @@ type Recorder struct {
 
 	// BRC-139 manifest consumer metrics. Updated by the proxy's
 	// auto-config subsystem (shard-proxy/manifest). Names mirror the
-	// listener's multicast_manifest_* family so one dashboard covers both
-	// halves of the fleet.
+	// listener's multicast_manifest_* family so one dashboard covers
+	// proxies and listeners alike.
 	manifestReceived      atomic.Int64
 	manifestPilotsKnown   atomic.Int64
 	manifestQuorumMetBits atomic.Int32
@@ -442,8 +442,8 @@ func New(instanceID string, numWorkers int, otlpEndpoint string, otlpInterval ti
 	}
 
 	// BRC-139 manifest consumer family. Registered here (not just tracked in
-	// atomics) so proxy-side divergence is observable, without it, half the
-	// fleet reports nothing and a cross-peer disagreement looks like silence.
+	// atomics) so proxy-side divergence is observable, without it, every
+	// proxy reports nothing and a cross-peer disagreement looks like silence.
 	if r.manifestDivergence, err = meter.Int64Counter("multicast_manifest_divergence_total",
 		metric.WithDescription("Authoritative-peer disagreements observed by the auto-config evaluator (BRC-139 §Divergence telemetry)")); err != nil {
 		return nil, err
@@ -582,7 +582,7 @@ func New(instanceID string, numWorkers int, otlpEndpoint string, otlpInterval ti
 		return nil, err
 	}
 	if r.beefTopics, err = meter.Int64Counter("bsp_beef_topics_total",
-		metric.WithDescription("Topic names on admitted BRC-149 submission records, by topic_role: deliverable (matched at the edge; 1 on the open path, up to the operator's cap on the authenticated path) or label (carried to the subscriber, never matched, never billed)")); err != nil {
+		metric.WithDescription("Topic names on admitted BRC-149 submission records, by topic_role: deliverable (matched at the edge; 1 on the open path, up to the operator's cap on the authenticated path) or label (carried to the subscriber, never matched)")); err != nil {
 		return nil, err
 	}
 	// TxidClaim* are per-packet when ingress dedup is on; direct prometheus

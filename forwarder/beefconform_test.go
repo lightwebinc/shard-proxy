@@ -26,7 +26,7 @@ func buildBEEFFrameBytesTopicID(t *testing.T, topicID [32]byte, obj []byte) []by
 // way around it. A frame carrying the zero TopicID is undeliverable by
 // construction, yet it would still cost a full fabric emission and, because
 // an empty topic election matches every topic, land on every aggregator
-// consumer and be billed to them.
+// consumer.
 func TestProcessBEEF_ZeroTopicDropped(t *testing.T) {
 	fw, _ := makeBEEFForwarder(t)
 	src := &net.UDPAddr{IP: net.ParseIP("fd00::99"), Port: 12345}
@@ -109,7 +109,7 @@ func TestProcessBEEF_RejectedFrameKeepsNoDedupClaim(t *testing.T) {
 // SHA-256(ContentID ‖ TopicID). Taken on trust, anyone can CLAIM AN OBJECT
 // THEY DO NOT HAVE: frame the ContentID of an object about to be published,
 // win the claim, and every later copy of the REAL object is suppressed
-// fleet-wide as a duplicate. One small frame, no account. The record path
+// network-wide as a duplicate. One small frame, no account. The record path
 // never had this hole because it computes the ContentID itself.
 func TestProcessBEEF_ForgedContentIDDropped(t *testing.T) {
 	fw, _ := makeBEEFForwarder(t)

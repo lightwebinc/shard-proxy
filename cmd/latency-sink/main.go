@@ -11,7 +11,7 @@
 // Usage:
 //
 //	latency-sink -iface mc-local -port 9001 -groups ff3e::b:0,ff3e::b:1 \
-//	  -source fd00:5::1 -duration 70s -json /tmp/lat.json
+//	  -source 2001:db8:5::1 -duration 70s -json /tmp/lat.json
 package main
 
 import (
