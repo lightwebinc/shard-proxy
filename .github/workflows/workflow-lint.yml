@@ -15,4 +15,4 @@ permissions:
 
 jobs:
   workflow-lint:
-    uses: lightwebinc/ci/.github/workflows/workflow-lint.yml@addd14064ef61ebf08d01de9b80bda61438880fb # v0.7.1
+    uses: lightwebinc/ci/.github/workflows/workflow-lint.yml@5e3a118fc997d254cbc49b9bf14c4fd3ec3974d0 # v0.7.2
