@@ -3,8 +3,8 @@ module github.com/lightwebinc/shard-proxy/ci
 go 1.26.1
 
 require (
-	dagger.io/dagger v0.21.11 // indirect
-	github.com/lightwebinc/ci v0.7.1
+	dagger.io/dagger v0.21.12 // indirect
+	github.com/lightwebinc/ci v0.7.2
 )
 
 require (
